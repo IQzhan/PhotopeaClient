@@ -1,0 +1,39 @@
+{
+  "name": "photopea-client",
+  "version": "1.0.0",
+  "description": "Minimal desktop shell for Photopea",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win dir --x64",
+    "pack": "pack.bat"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.photopea.client",
+    "productName": "PhotopeaClient",
+    "files": [
+      "main.js",
+      "preload.js",
+      "settings.html",
+      "settings-preload.js",
+      "formats.js",
+      "icon.png"
+    ],
+    "win": {
+      "icon": "icon.png",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ]
+    }
+  }
+}
