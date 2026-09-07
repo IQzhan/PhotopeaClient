@@ -25,9 +25,16 @@
       "formats.js",
       "icon.png"
     ],
+    "extraFiles": [
+      {
+        "from": "associations.default.json",
+        "to": "associations.json"
+      }
+    ],
     "win": {
       "icon": "icon.png",
-      "signAndEditExecutable": false,
+      "signAndEditExecutable": true,
+      "signExecutable": false,
       "target": [
         {
           "target": "dir",

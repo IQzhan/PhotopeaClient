@@ -1,7 +1,24 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
+function showLoading(msg) {
+  const el = document.getElementById('pp-shell-loading');
+  const text = document.getElementById('pp-shell-loading-text');
+  if (!el) return;
+  if (text) text.textContent = msg || '正在打开…';
+  el.classList.add('show');
+}
+
+function hideLoading() {
+  const el = document.getElementById('pp-shell-loading');
+  if (el) el.classList.remove('show');
+}
+
 contextBridge.exposeInMainWorld('ppShell', {
   takeFile: () => ipcRenderer.invoke('take-file'),
+  hasPending: () => ipcRenderer.invoke('has-pending'),
+  pendingNames: () => ipcRenderer.invoke('pending-names'),
+  showLoading,
+  hideLoading,
   maximize: () => ipcRenderer.send('win-max')
 });
 
@@ -18,6 +35,11 @@ iframe[src*="googlesyndication"],iframe[src*="doubleclick"],iframe[src*="adservi
 #pp-shell-controls button:hover{background:rgba(255,255,255,.14)}
 #pp-shell-controls button#pp-shell-close:hover{background:#e81123;color:#fff}
 #pp-shell-controls svg{width:10px;height:10px;display:block}
+#pp-shell-loading{position:absolute;left:0;right:0;top:29px;bottom:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(35,35,35,.82);color:#eee;font:13px/1.45 "Segoe UI","Microsoft YaHei UI",sans-serif;pointer-events:auto;-webkit-app-region:no-drag}
+#pp-shell-loading.show{display:flex}
+#pp-shell-spinner{width:28px;height:28px;border:3px solid rgba(255,255,255,.18);border-top-color:#18a497;border-radius:50%;animation:pp-spin .8s linear infinite}
+#pp-shell-loading-text{max-width:70%;text-align:center;word-break:break-all;white-space:pre-line}
+@keyframes pp-spin{to{transform:rotate(360deg)}}
 `;
 
 function injectChrome() {
@@ -46,6 +68,10 @@ function injectChrome() {
       <button id="pp-shell-close" title="关闭" aria-label="关闭">
         <svg viewBox="0 0 10 10"><path fill="currentColor" d="M1 0l4 4 4-4 1 1-4 4 4 4-1 1-4-4-4 4-1-1 4-4-4-4z"/></svg>
       </button>
+    </div>
+    <div id="pp-shell-loading" aria-live="polite">
+      <div id="pp-shell-spinner"></div>
+      <div id="pp-shell-loading-text">正在打开…</div>
     </div>`;
 
   document.documentElement.append(style, root);
@@ -120,22 +146,6 @@ const PAGE_PATCH = `(() => {
     }
   };
 
-  let introTries = 0;
-  const skipMarketing = () => {
-    if (window.app && app.documents && app.documents.length > 0) return;
-    introTries += 1;
-    if (introTries === 2) {
-      try { window.postMessage('app.documents.add(1920, 1080, 72, "Untitled");', '*'); } catch (e) {}
-      try { if (window.app) app.documents.add(1920, 1080, 72, 'Untitled'); } catch (e) {}
-    }
-    if (introTries === 5) {
-      const btn = [...document.querySelectorAll('div,button,span,a')].find((el) =>
-        /^(新建项目|New Project)$/.test((el.textContent || '').trim())
-      );
-      if (btn) btn.click();
-    }
-  };
-
   const hideAdCol = () => {
     const col = document.querySelector('body > div.flexrow.app > div:nth-child(2)');
     if (col) {
@@ -152,54 +162,102 @@ const PAGE_PATCH = `(() => {
     }
   };
 
-  const tick = () => { sweepChrome(); skipMarketing(); hideAdCol(); };
+  const tick = () => { sweepChrome(); hideAdCol(); };
   tick();
   setInterval(tick, 800);
 })();`;
 
+const OPEN_RUNTIME = `(() => {
+  if (window.__ppOpenRuntime) return;
+  window.__ppOpenRuntime = true;
+
+  const findFileInput = () => {
+    const all = [...document.querySelectorAll('input[type=file]')];
+    return all.find((el) => el.multiple && el.getAttribute('accept') == null) || all.find((el) => el.multiple) || all[0] || null;
+  };
+
+  const waitInput = () => new Promise((resolve) => {
+    const now = findFileInput();
+    if (now) return resolve(now);
+    const t = setInterval(() => {
+      const el = findFileInput();
+      if (el) { clearInterval(t); resolve(el); }
+    }, 40);
+    setTimeout(() => { clearInterval(t); resolve(findFileInput()); }, 60000);
+  });
+
+  const asFile = (payload) => {
+    const raw = payload && payload.data;
+    const bytes = raw instanceof Uint8Array ? raw
+      : raw instanceof ArrayBuffer ? new Uint8Array(raw)
+      : Array.isArray(raw) ? Uint8Array.from(raw)
+      : new Uint8Array(raw || []);
+    return new File([bytes], payload.name, { type: 'application/octet-stream', lastModified: Date.now() });
+  };
+
+  const applyName = (name) => {
+    if (!window.app || !app.activeDocument || !name) return;
+    const doc = app.activeDocument;
+    const cur = String(doc.name || '');
+    if (cur === name || cur === name.replace(/\\.[^.]+$/, '')) return;
+    try { doc.name = name; } catch (e) {
+      try { doc.name = name.replace(/\\.[^.]+$/, ''); } catch (e2) {}
+    }
+  };
+
+  const openOne = async (payload) => {
+    const native = asFile(payload);
+    const dt = new DataTransfer();
+    dt.items.add(native);
+    const drop = () => {
+      const ev = { bubbles: true, cancelable: true, dataTransfer: dt };
+      document.dispatchEvent(new DragEvent('dragover', ev));
+      document.dispatchEvent(new DragEvent('drop', ev));
+    };
+    const input = await waitInput();
+    if (input) {
+      try {
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) { drop(); }
+    } else drop();
+    [300, 1000, 2500].forEach((ms) => setTimeout(() => applyName(payload.name), ms));
+  };
+
+  window.__ppDrainFiles = async function () {
+    if (window.__ppShellOpening) return;
+    window.__ppShellOpening = true;
+    try {
+      const names = await window.ppShell.pendingNames();
+      if (names && names.length) window.ppShell.showLoading('正在加载编辑器…\\n即将打开 ' + names[0]);
+      await waitInput();
+      while (true) {
+        const queued = await window.ppShell.pendingNames();
+        if (!queued || !queued.length) break;
+        window.ppShell.showLoading('正在打开 ' + queued[0]);
+        const payload = await window.ppShell.takeFile();
+        if (!payload) break;
+        window.ppShell.showLoading('正在打开 ' + payload.name);
+        await openOne(payload);
+      }
+    } finally {
+      window.ppShell.hideLoading();
+      window.__ppShellOpening = false;
+      const leftover = await window.ppShell.hasPending();
+      if (leftover) window.__ppDrainFiles();
+    }
+  };
+})();`;
+
 function waitAndOpen() {
   webFrame.executeJavaScript(PAGE_PATCH);
-  webFrame.executeJavaScript(`
-    new Promise((resolve) => {
-      if (window.app) return resolve(true);
-      const done = () => resolve(true);
-      const onMsg = (e) => { if (e.data === 'done') { cleanup(); done(); } };
-      const t = setInterval(() => { if (window.app) { cleanup(); done(); } }, 100);
-      const timeout = setTimeout(() => { cleanup(); done(); }, 20000);
-      function cleanup() {
-        clearInterval(t);
-        clearTimeout(timeout);
-        window.removeEventListener('message', onMsg);
-      }
-      window.addEventListener('message', onMsg);
-    })
-  `).then(() => webFrame.executeJavaScript(`
-    (async () => {
-      if (window.__ppShellOpening) return;
-      window.__ppShellOpening = true;
-      try {
-        while (true) {
-          const file = await window.ppShell.takeFile();
-          if (!file) break;
-          const bytes = Uint8Array.from(atob(file.b64), c => c.charCodeAt(0));
-          if (window.app && typeof app.open === 'function') {
-            app.open('data:application/octet-stream;base64,' + file.b64);
-          } else {
-            window.postMessage(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '*');
-          }
-        }
-        if (window.app && (!app.documents || app.documents.length === 0)) {
-          try { app.documents.add(1920, 1080, 72, 'Untitled'); }
-          catch (e) { try { app.documents.add(1920, 1080); } catch (e2) {} }
-        }
-      } finally {
-        window.__ppShellOpening = false;
-      }
-    })();
-  `));
+  webFrame.executeJavaScript(OPEN_RUNTIME).then(() => webFrame.executeJavaScript('window.__ppDrainFiles()'));
 }
 
-ipcRenderer.on('file-queued', waitAndOpen);
+ipcRenderer.on('file-queued', (_e, names) => {
+  showLoading(names && names[0] ? ('正在打开 ' + names[0]) : '正在打开…');
+  waitAndOpen();
+});
 ipcRenderer.on('win-max-state', (_e, max) => {
   const icon = document.getElementById('pp-shell-max-icon');
   if (!icon) return;
@@ -211,7 +269,10 @@ ipcRenderer.on('win-max-state', (_e, max) => {
 const boot = () => {
   injectChrome();
   setInterval(injectChrome, 800);
-  waitAndOpen();
+  ipcRenderer.invoke('pending-names').then((names) => {
+    if (names && names.length) showLoading('正在加载编辑器…\n即将打开 ' + names[0]);
+    waitAndOpen();
+  }).catch(() => waitAndOpen());
 };
 
 webFrame.executeJavaScript(PAGE_PATCH);

@@ -4,3 +4,4 @@ out/
 *.log
 .DS_Store
 _shot*.png
+_pack_test.psd

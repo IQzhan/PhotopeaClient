@@ -14,27 +14,38 @@ let win;
 let settingsWin;
 const pendingFiles = [];
 
-function assocPath() {
-  return path.join(app.getPath('userData'), 'associations.json');
+function appExe() {
+  return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+}
+
+function assocCandidates() {
+  const names = [];
+  if (app.isPackaged) names.push(path.join(path.dirname(appExe()), 'associations.json'));
+  names.push(path.join(app.getPath('userData'), 'associations.json'));
+  return names;
 }
 
 function loadExts() {
-  try {
-    const data = JSON.parse(fs.readFileSync(assocPath(), 'utf8'));
-    if (Array.isArray(data.exts)) return data.exts.map((e) => e.toLowerCase()).filter(isSupportedExt);
-  } catch (e) {}
+  for (const file of assocCandidates()) {
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (Array.isArray(data.exts)) return data.exts.map((e) => e.toLowerCase()).filter(isSupportedExt);
+    } catch (e) {}
+  }
   return DEFAULT_EXTS.slice();
 }
 
 function saveExts(exts) {
   const clean = [...new Set(exts.map((e) => e.toLowerCase()).filter(isSupportedExt))];
-  fs.mkdirSync(app.getPath('userData'), { recursive: true });
-  fs.writeFileSync(assocPath(), JSON.stringify({ exts: clean }, null, 2));
-  return clean;
-}
-
-function appExe() {
-  return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+  const payload = JSON.stringify({ exts: clean }, null, 2);
+  for (const file of assocCandidates()) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, payload);
+      return clean;
+    } catch (e) {}
+  }
+  throw new Error('无法保存文件关联配置');
 }
 
 function progId(ext) {
@@ -47,22 +58,59 @@ function reg(args) {
   });
 }
 
+async function registerAppPaths() {
+  const exe = path.resolve(appExe());
+  const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\PhotopeaClient.exe';
+  await reg(['add', key, '/ve', '/d', exe, '/f']);
+  await reg(['add', key, '/v', 'Path', '/d', path.dirname(exe), '/f']);
+}
+
 async function bindExt(ext) {
-  const exe = appExe();
+  const exe = path.resolve(appExe());
   const id = progId(ext);
   const command = `"${exe}" "%1"`;
+  const exeName = path.basename(exe);
+  const fileExts = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.${ext}`;
   await reg(['add', `HKCU\\Software\\Classes\\.${ext}`, '/ve', '/d', id, '/f']);
+  await reg(['add', `HKCU\\Software\\Classes\\.${ext}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']);
   await reg(['add', `HKCU\\Software\\Classes\\${id}`, '/ve', '/d', `Photopea ${ext.toUpperCase()}`, '/f']);
   await reg(['add', `HKCU\\Software\\Classes\\${id}\\DefaultIcon`, '/ve', '/d', `${exe},0`, '/f']);
+  await reg(['add', `HKCU\\Software\\Classes\\${id}\\shell`, '/ve', '/d', 'open', '/f']);
+  await reg(['add', `HKCU\\Software\\Classes\\${id}\\shell\\open`, '/ve', '/d', '用 PhotopeaClient 打开', '/f']);
   await reg(['add', `HKCU\\Software\\Classes\\${id}\\shell\\open\\command`, '/ve', '/d', command, '/f']);
-  await reg(['add', `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.${ext}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']);
+  await reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}`, '/v', 'FriendlyAppName', '/d', 'PhotopeaClient', '/f']);
+  await reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}\\shell\\open\\command`, '/ve', '/d', command, '/f']);
+  await reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}\\SupportedTypes`, '/v', `.${ext}`, '/t', 'REG_SZ', '/d', '', '/f']);
+  await reg(['add', `${fileExts}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']);
+  await reg(['add', `${fileExts}\\OpenWithList`, '/v', 'a', '/d', exeName, '/f']);
+  await reg(['add', `${fileExts}\\OpenWithList`, '/v', 'MRUList', '/d', 'a', '/f']);
+  await reg(['add', `HKCU\\Software\\PhotopeaClient\\Capabilities\\FileAssociations`, '/v', `.${ext}`, '/d', id, '/f']);
+  await reg(['delete', `${fileExts}\\UserChoice`, '/f']);
+  await reg(['delete', `${fileExts}\\UserChoiceLatest`, '/f']);
+}
+
+async function registerAppCapabilities() {
+  const cap = 'HKCU\\Software\\PhotopeaClient\\Capabilities';
+  await reg(['add', cap, '/v', 'ApplicationName', '/d', 'PhotopeaClient', '/f']);
+  await reg(['add', cap, '/v', 'ApplicationDescription', '/d', 'Photopea 桌面客户端', '/f']);
+  await reg(['add', 'HKCU\\Software\\RegisteredApplications', '/v', 'PhotopeaClient', '/d', 'Software\\PhotopeaClient\\Capabilities', '/f']);
+}
+
+function notifyExplorer() {
+  execFile('powershell', ['-NoProfile', '-Command',
+    "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class N { [DllImport(\"shell32.dll\")] public static extern void SHChangeNotify(int w, uint f, IntPtr a, IntPtr b); }'; [N]::SHChangeNotify(0x8000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)"
+  ], { windowsHide: true }, () => {});
 }
 
 async function unbindExt(ext) {
   const id = progId(ext);
+  const fileExts = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.${ext}`;
   await reg(['delete', `HKCU\\Software\\Classes\\.${ext}`, '/ve', '/f']);
+  await reg(['delete', `HKCU\\Software\\Classes\\.${ext}\\OpenWithProgids`, '/v', id, '/f']);
   await reg(['delete', `HKCU\\Software\\Classes\\${id}`, '/f']);
-  await reg(['delete', `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.${ext}\\OpenWithProgids`, '/v', id, '/f']);
+  await reg(['delete', `${fileExts}\\OpenWithProgids`, '/v', id, '/f']);
+  await reg(['delete', `${fileExts}\\OpenWithList`, '/v', 'a', '/f']);
+  await reg(['delete', `HKCU\\Software\\PhotopeaClient\\Capabilities\\FileAssociations`, '/v', `.${ext}`, '/f']);
 }
 
 async function applyAssociations(exts) {
@@ -72,21 +120,26 @@ async function applyAssociations(exts) {
   }
   const next = new Set(exts.map((e) => e.toLowerCase()).filter(isSupportedExt));
   const prev = new Set(loadExts());
+  await registerAppCapabilities();
+  await registerAppPaths();
   for (const ext of prev) {
     if (!next.has(ext)) await unbindExt(ext);
   }
   for (const ext of next) await bindExt(ext);
   saveExts([...next]);
+  notifyExplorer();
 }
 
 function isBoundFile(arg, exts) {
   if (typeof arg !== 'string' || arg.startsWith('-')) return false;
-  const ext = path.extname(arg).slice(1).toLowerCase();
-  return exts.includes(ext) && fs.existsSync(arg);
+  const resolved = path.resolve(arg.replace(/^"(.*)"$/, '$1'));
+  if (resolved.toLowerCase() === path.resolve(appExe()).toLowerCase()) return false;
+  const ext = path.extname(resolved).slice(1).toLowerCase();
+  return exts.includes(ext) && fs.existsSync(resolved);
 }
 
 function collectFiles(argv, exts) {
-  return argv.filter((a) => isBoundFile(a, exts));
+  return argv.slice(1).filter((a) => isBoundFile(a, exts)).map((a) => path.resolve(a.replace(/^"(.*)"$/, '$1')));
 }
 
 function attachAdBlock(ses) {
@@ -199,15 +252,20 @@ function openSettings() {
 
 function queueFiles(files, notify) {
   for (const file of files) pendingFiles.push(path.resolve(file));
-  if (notify && win && pendingFiles.length) win.webContents.send('file-queued');
+  if (notify && win && pendingFiles.length) {
+    win.webContents.send('file-queued', pendingFiles.map((f) => path.basename(f)));
+  }
 }
 
 ipcMain.handle('take-file', async () => {
   const filePath = pendingFiles.shift();
   if (!filePath) return null;
   const data = await fs.promises.readFile(filePath);
-  return { name: path.basename(filePath), b64: data.toString('base64') };
+  return { name: path.basename(filePath), data };
 });
+
+ipcMain.handle('has-pending', () => pendingFiles.length > 0);
+ipcMain.handle('pending-names', () => pendingFiles.map((f) => path.basename(f)));
 
 ipcMain.handle('assoc-state', () => ({
   groups: GROUPS,
@@ -247,7 +305,7 @@ if (!gotLock) {
     app.setAppUserModelId('com.photopea.client');
     attachAdBlock(session.defaultSession);
     const exts = loadExts();
-    if (app.isPackaged) await applyAssociations(exts);
+    await applyAssociations(exts);
     queueFiles(collectFiles(process.argv, exts), false);
     createWindow();
   });
