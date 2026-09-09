@@ -13,8 +13,6 @@ const AD_RE = /googlesyndication|doubleclick|adservice\.google|pagead2|googleads
 let win;
 let settingsWin;
 const pendingFiles = [];
-/** 内置浮层打开时临时扩窗，关闭后还原 */
-let floatPadState = null;
 
 function appExe() {
   return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
@@ -295,47 +293,6 @@ function openSettings() {
   settingsWin.on('closed', () => { settingsWin = null; });
 }
 
-function restoreFloatPad(w) {
-  if (!floatPadState || !w || w.isDestroyed()) {
-    floatPadState = null;
-    return;
-  }
-  try {
-    if (floatPadState.wasMaximized) w.maximize();
-    else w.setBounds(floatPadState.bounds);
-  } catch (e) {}
-  floatPadState = null;
-}
-
-function ensureFloatSpace(w, rect) {
-  if (!w || w.isDestroyed()) return;
-  if (!rect || !rect.active) {
-    restoreFloatPad(w);
-    return;
-  }
-  const margin = 16;
-  const content = w.getContentBounds();
-  const needL = Math.max(0, margin - Number(rect.left || 0));
-  const needT = Math.max(0, margin - Number(rect.top || 0));
-  const needR = Math.max(0, Number(rect.right || 0) - content.width + margin);
-  const needB = Math.max(0, Number(rect.bottom || 0) - content.height + margin);
-  if (needL + needT + needR + needB === 0) return;
-
-  if (!floatPadState) {
-    floatPadState = { bounds: w.getBounds(), wasMaximized: w.isMaximized() };
-  }
-  try {
-    if (w.isMaximized()) w.unmaximize();
-    const b = w.getBounds();
-    w.setBounds({
-      x: Math.round(b.x - needL),
-      y: Math.round(b.y - needT),
-      width: Math.round(b.width + needL + needR),
-      height: Math.round(b.height + needT + needB)
-    });
-  } catch (e) {}
-}
-
 function queueFiles(files, notify) {
   for (const file of files) pendingFiles.push(path.resolve(file));
   if (notify && win && pendingFiles.length) {
@@ -373,10 +330,6 @@ ipcMain.on('win-max', (e) => {
 });
 ipcMain.on('win-close', (e) => BrowserWindow.fromWebContents(e.sender)?.close());
 ipcMain.on('win-settings', () => openSettings());
-ipcMain.on('pp-float-space', (e, rect) => {
-  const w = BrowserWindow.fromWebContents(e.sender);
-  ensureFloatSpace(w, rect);
-});
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
