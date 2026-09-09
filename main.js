@@ -13,6 +13,8 @@ const AD_RE = /googlesyndication|doubleclick|adservice\.google|pagead2|googleads
 let win;
 let settingsWin;
 const pendingFiles = [];
+/** 内置浮层打开时临时扩窗，关闭后还原 */
+let floatPadState = null;
 
 function appExe() {
   return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
@@ -58,6 +60,32 @@ function reg(args) {
   });
 }
 
+function fingerprintPath() {
+  return path.join(app.getPath('userData'), 'assoc-fingerprint.json');
+}
+
+function associationFingerprint(exts) {
+  return JSON.stringify({
+    exe: path.resolve(appExe()).toLowerCase(),
+    exts: [...new Set(exts.map((e) => e.toLowerCase()))].sort()
+  });
+}
+
+function readFingerprint() {
+  try {
+    return fs.readFileSync(fingerprintPath(), 'utf8').trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+function writeFingerprint(exts) {
+  try {
+    fs.mkdirSync(path.dirname(fingerprintPath()), { recursive: true });
+    fs.writeFileSync(fingerprintPath(), associationFingerprint(exts));
+  } catch (e) {}
+}
+
 async function registerAppPaths() {
   const exe = path.resolve(appExe());
   const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\PhotopeaClient.exe';
@@ -71,22 +99,24 @@ async function bindExt(ext) {
   const command = `"${exe}" "%1"`;
   const exeName = path.basename(exe);
   const fileExts = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.${ext}`;
-  await reg(['add', `HKCU\\Software\\Classes\\.${ext}`, '/ve', '/d', id, '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\.${ext}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\${id}`, '/ve', '/d', `Photopea ${ext.toUpperCase()}`, '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\${id}\\DefaultIcon`, '/ve', '/d', `${exe},0`, '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\${id}\\shell`, '/ve', '/d', 'open', '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\${id}\\shell\\open`, '/ve', '/d', '用 PhotopeaClient 打开', '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\${id}\\shell\\open\\command`, '/ve', '/d', command, '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}`, '/v', 'FriendlyAppName', '/d', 'PhotopeaClient', '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}\\shell\\open\\command`, '/ve', '/d', command, '/f']);
-  await reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}\\SupportedTypes`, '/v', `.${ext}`, '/t', 'REG_SZ', '/d', '', '/f']);
-  await reg(['add', `${fileExts}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']);
-  await reg(['add', `${fileExts}\\OpenWithList`, '/v', 'a', '/d', exeName, '/f']);
-  await reg(['add', `${fileExts}\\OpenWithList`, '/v', 'MRUList', '/d', 'a', '/f']);
-  await reg(['add', `HKCU\\Software\\PhotopeaClient\\Capabilities\\FileAssociations`, '/v', `.${ext}`, '/d', id, '/f']);
-  await reg(['delete', `${fileExts}\\UserChoice`, '/f']);
-  await reg(['delete', `${fileExts}\\UserChoiceLatest`, '/f']);
+  await Promise.all([
+    reg(['add', `HKCU\\Software\\Classes\\.${ext}`, '/ve', '/d', id, '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\.${ext}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\${id}`, '/ve', '/d', `Photopea ${ext.toUpperCase()}`, '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\${id}\\DefaultIcon`, '/ve', '/d', `${exe},0`, '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\${id}\\shell`, '/ve', '/d', 'open', '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\${id}\\shell\\open`, '/ve', '/d', '用 PhotopeaClient 打开', '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\${id}\\shell\\open\\command`, '/ve', '/d', command, '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}`, '/v', 'FriendlyAppName', '/d', 'PhotopeaClient', '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}\\shell\\open\\command`, '/ve', '/d', command, '/f']),
+    reg(['add', `HKCU\\Software\\Classes\\Applications\\${exeName}\\SupportedTypes`, '/v', `.${ext}`, '/t', 'REG_SZ', '/d', '', '/f']),
+    reg(['add', `${fileExts}\\OpenWithProgids`, '/v', id, '/t', 'REG_NONE', '/d', '', '/f']),
+    reg(['add', `${fileExts}\\OpenWithList`, '/v', 'a', '/d', exeName, '/f']),
+    reg(['add', `${fileExts}\\OpenWithList`, '/v', 'MRUList', '/d', 'a', '/f']),
+    reg(['add', `HKCU\\Software\\PhotopeaClient\\Capabilities\\FileAssociations`, '/v', `.${ext}`, '/d', id, '/f']),
+    reg(['delete', `${fileExts}\\UserChoice`, '/f']),
+    reg(['delete', `${fileExts}\\UserChoiceLatest`, '/f'])
+  ]);
 }
 
 async function registerAppCapabilities() {
@@ -105,29 +135,40 @@ function notifyExplorer() {
 async function unbindExt(ext) {
   const id = progId(ext);
   const fileExts = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.${ext}`;
-  await reg(['delete', `HKCU\\Software\\Classes\\.${ext}`, '/ve', '/f']);
-  await reg(['delete', `HKCU\\Software\\Classes\\.${ext}\\OpenWithProgids`, '/v', id, '/f']);
-  await reg(['delete', `HKCU\\Software\\Classes\\${id}`, '/f']);
-  await reg(['delete', `${fileExts}\\OpenWithProgids`, '/v', id, '/f']);
-  await reg(['delete', `${fileExts}\\OpenWithList`, '/v', 'a', '/f']);
-  await reg(['delete', `HKCU\\Software\\PhotopeaClient\\Capabilities\\FileAssociations`, '/v', `.${ext}`, '/f']);
+  await Promise.all([
+    reg(['delete', `HKCU\\Software\\Classes\\.${ext}`, '/ve', '/f']),
+    reg(['delete', `HKCU\\Software\\Classes\\.${ext}\\OpenWithProgids`, '/v', id, '/f']),
+    reg(['delete', `HKCU\\Software\\Classes\\${id}`, '/f']),
+    reg(['delete', `${fileExts}\\OpenWithProgids`, '/v', id, '/f']),
+    reg(['delete', `${fileExts}\\OpenWithList`, '/v', 'a', '/f']),
+    reg(['delete', `HKCU\\Software\\PhotopeaClient\\Capabilities\\FileAssociations`, '/v', `.${ext}`, '/f'])
+  ]);
 }
 
-async function applyAssociations(exts) {
+async function applyAssociations(exts, { force = false } = {}) {
+  const clean = [...new Set(exts.map((e) => e.toLowerCase()).filter(isSupportedExt))];
   if (process.platform !== 'win32') {
-    saveExts(exts);
-    return;
+    saveExts(clean);
+    writeFingerprint(clean);
+    return clean;
   }
-  const next = new Set(exts.map((e) => e.toLowerCase()).filter(isSupportedExt));
+  if (!force && readFingerprint() === associationFingerprint(clean)) {
+    return clean;
+  }
   const prev = new Set(loadExts());
+  const next = new Set(clean);
   await registerAppCapabilities();
   await registerAppPaths();
+  const jobs = [];
   for (const ext of prev) {
-    if (!next.has(ext)) await unbindExt(ext);
+    if (!next.has(ext)) jobs.push(unbindExt(ext));
   }
-  for (const ext of next) await bindExt(ext);
-  saveExts([...next]);
+  for (const ext of next) jobs.push(bindExt(ext));
+  await Promise.all(jobs);
+  saveExts(clean);
+  writeFingerprint(clean);
   notifyExplorer();
+  return clean;
 }
 
 function isBoundFile(arg, exts) {
@@ -229,13 +270,14 @@ function openSettings() {
   }
   settingsWin = new BrowserWindow({
     width: 560,
-    height: 640,
+    height: 680,
     minWidth: 480,
-    minHeight: 420,
+    minHeight: 480,
     parent: win || undefined,
     modal: !!win,
     frame: false,
     resizable: true,
+    useContentSize: true,
     backgroundColor: '#2d2d2d',
     autoHideMenuBar: true,
     icon: path.join(__dirname, 'icon.png'),
@@ -247,7 +289,51 @@ function openSettings() {
     }
   });
   settingsWin.loadFile(path.join(__dirname, 'settings.html'));
+  settingsWin.once('ready-to-show', () => {
+    try { settingsWin.setContentSize(560, 680); } catch (e) {}
+  });
   settingsWin.on('closed', () => { settingsWin = null; });
+}
+
+function restoreFloatPad(w) {
+  if (!floatPadState || !w || w.isDestroyed()) {
+    floatPadState = null;
+    return;
+  }
+  try {
+    if (floatPadState.wasMaximized) w.maximize();
+    else w.setBounds(floatPadState.bounds);
+  } catch (e) {}
+  floatPadState = null;
+}
+
+function ensureFloatSpace(w, rect) {
+  if (!w || w.isDestroyed()) return;
+  if (!rect || !rect.active) {
+    restoreFloatPad(w);
+    return;
+  }
+  const margin = 16;
+  const content = w.getContentBounds();
+  const needL = Math.max(0, margin - Number(rect.left || 0));
+  const needT = Math.max(0, margin - Number(rect.top || 0));
+  const needR = Math.max(0, Number(rect.right || 0) - content.width + margin);
+  const needB = Math.max(0, Number(rect.bottom || 0) - content.height + margin);
+  if (needL + needT + needR + needB === 0) return;
+
+  if (!floatPadState) {
+    floatPadState = { bounds: w.getBounds(), wasMaximized: w.isMaximized() };
+  }
+  try {
+    if (w.isMaximized()) w.unmaximize();
+    const b = w.getBounds();
+    w.setBounds({
+      x: Math.round(b.x - needL),
+      y: Math.round(b.y - needT),
+      width: Math.round(b.width + needL + needR),
+      height: Math.round(b.height + needT + needB)
+    });
+  } catch (e) {}
 }
 
 function queueFiles(files, notify) {
@@ -273,19 +359,24 @@ ipcMain.handle('assoc-state', () => ({
 }));
 
 ipcMain.handle('assoc-save', async (_e, exts) => {
-  await applyAssociations(exts);
+  await applyAssociations(exts, { force: true });
   return loadExts();
 });
 
 ipcMain.on('assoc-close', () => settingsWin?.close());
-ipcMain.on('win-min', () => win?.minimize());
-ipcMain.on('win-max', () => {
-  if (!win) return;
-  if (win.isMaximized()) win.unmaximize();
-  else win.maximize();
+ipcMain.on('win-min', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize());
+ipcMain.on('win-max', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return;
+  if (w.isMaximized()) w.unmaximize();
+  else w.maximize();
 });
-ipcMain.on('win-close', () => win?.close());
+ipcMain.on('win-close', (e) => BrowserWindow.fromWebContents(e.sender)?.close());
 ipcMain.on('win-settings', () => openSettings());
+ipcMain.on('pp-float-space', (e, rect) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  ensureFloatSpace(w, rect);
+});
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -300,14 +391,17 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(async () => {
+  app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
     app.setAppUserModelId('com.photopea.client');
     attachAdBlock(session.defaultSession);
     const exts = loadExts();
-    await applyAssociations(exts);
     queueFiles(collectFiles(process.argv, exts), false);
     createWindow();
+    // 关联写入不要挡住首屏：路径未变则跳过；否则后台刷新
+    setImmediate(() => {
+      applyAssociations(exts).catch(() => {});
+    });
   });
 }
 

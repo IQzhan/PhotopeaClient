@@ -19,23 +19,29 @@ contextBridge.exposeInMainWorld('ppShell', {
   pendingNames: () => ipcRenderer.invoke('pending-names'),
   showLoading,
   hideLoading,
-  maximize: () => ipcRenderer.send('win-max')
+  maximize: () => ipcRenderer.send('win-max'),
+  floatSpace: (rect) => ipcRenderer.send('pp-float-space', rect)
 });
 
 const css = `
 html,body{overflow:hidden!important}
+html.pp-float-open,html.pp-float-open body{overflow:visible!important}
 iframe[src*="googlesyndication"],iframe[src*="doubleclick"],iframe[src*="adservice"],iframe[src*="pagead"],ins.adsbygoogle,[id*="google_ads"]{display:none!important}
-#pp-shell-root{position:fixed;inset:0;pointer-events:none;z-index:2147483647}
-#pp-shell-account,#pp-shell-right,#pp-shell-drag,#pp-shell-controls{position:absolute;top:0;height:29px;box-sizing:border-box}
-#pp-shell-account{left:398px;width:150px;background:#474747;pointer-events:auto;-webkit-app-region:drag}
-#pp-shell-drag{left:548px;right:430px;background:transparent;pointer-events:auto;-webkit-app-region:drag}
-#pp-shell-right{right:178px;width:252px;background:#474747;pointer-events:auto;-webkit-app-region:drag}
+#pp-shell-root{position:fixed;inset:0;pointer-events:none;z-index:5000}
+html.pp-float-open #pp-shell-root{z-index:2900}
+#pp-shell-right,#pp-shell-drag,#pp-shell-controls{position:absolute;top:0;height:29px;box-sizing:border-box}
+#pp-shell-right{right:176px;width:268px;background:#474747;pointer-events:auto;-webkit-app-region:drag}
+#pp-shell-drag{right:444px;width:100px;background:transparent;pointer-events:auto;-webkit-app-region:drag}
+html.pp-float-open #pp-shell-right,html.pp-float-open #pp-shell-drag{display:none!important}
 #pp-shell-controls{right:0;display:flex;pointer-events:auto;-webkit-app-region:no-drag;background:#474747}
 #pp-shell-controls button{width:44px;height:29px;border:0;padding:0;background:transparent;color:#e6e6e6;cursor:pointer;display:flex;align-items:center;justify-content:center}
 #pp-shell-controls button:hover{background:rgba(255,255,255,.14)}
+#pp-shell-controls button#pp-shell-settings{color:#18a497}
+#pp-shell-controls button#pp-shell-settings:hover{background:rgba(24,164,151,.28);color:#2ee0cf}
 #pp-shell-controls button#pp-shell-close:hover{background:#e81123;color:#fff}
 #pp-shell-controls svg{width:10px;height:10px;display:block}
-#pp-shell-loading{position:absolute;left:0;right:0;top:29px;bottom:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(35,35,35,.82);color:#eee;font:13px/1.45 "Segoe UI","Microsoft YaHei UI",sans-serif;pointer-events:auto;-webkit-app-region:no-drag}
+#pp-shell-controls #pp-shell-settings svg{width:14px;height:14px}
+#pp-shell-loading{position:absolute;left:0;right:0;top:29px;bottom:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;background:rgba(35,35,35,.82);color:#eee;font:13px/1.45 "Segoe UI","Microsoft YaHei UI",sans-serif;pointer-events:auto;-webkit-app-region:no-drag;z-index:1}
 #pp-shell-loading.show{display:flex}
 #pp-shell-spinner{width:28px;height:28px;border:3px solid rgba(255,255,255,.18);border-top-color:#18a497;border-radius:50%;animation:pp-spin .8s linear infinite}
 #pp-shell-loading-text{max-width:70%;text-align:center;word-break:break-all;white-space:pre-line}
@@ -52,12 +58,11 @@ function injectChrome() {
   const root = document.createElement('div');
   root.id = 'pp-shell-root';
   root.innerHTML = `
-    <div id="pp-shell-account" title=""></div>
-    <div id="pp-shell-drag"></div>
-    <div id="pp-shell-right"></div>
+    <div id="pp-shell-right" title=""></div>
+    <div id="pp-shell-drag" title="拖动窗口"></div>
     <div id="pp-shell-controls">
-      <button id="pp-shell-settings" title="文件关联" aria-label="设置">
-        <svg viewBox="0 0 12 12"><path fill="currentColor" d="M4.8 0h2.4l.3 1.4a4.4 4.4 0 011.3.8L10.3 1.6l1.7 1.7-1.6 1.5c.2.4.3.9.3 1.3 0 .5-.1.9-.3 1.3l1.6 1.5-1.7 1.7-1.5-1.6a4.4 4.4 0 01-1.3.8L7.2 12H4.8l-.3-1.4a4.4 4.4 0 01-1.3-.8L1.7 11.4.02 9.7l1.6-1.5A4.2 4.2 0 011.3 6.9 4.2 4.2 0 011.62 5.6L.02 4.1 1.7 2.4l1.5 1.6a4.4 4.4 0 011.3-.8zm1.2 4.1A1.9 1.9 0 106 7.9a1.9 1.9 0 000-3.8z"/></svg>
+      <button id="pp-shell-settings" title="文件关联设置" aria-label="设置">
+        <svg viewBox="0 0 14 14"><path fill="currentColor" d="M5.6 0h2.8l.35 1.65c.53.16 1.03.42 1.47.77l1.58-.66 1.98 1.98-.66 1.58c.35.44.61.94.77 1.47L14 5.6v2.8l-1.65.35c-.16.53-.42 1.03-.77 1.47l.66 1.58-1.98 1.98-1.58-.66c-.44.35-.94.61-1.47.77L8.4 14H5.6l-.35-1.65c-.53-.16-1.03-.42-1.47-.77l-1.58.66L.22 10.26l.66-1.58A4.9 4.9 0 01.72 7.2L0 8.4V5.6l1.65-.35c.16-.53.42-1.03.77-1.47L1.76 2.2 3.74.22l1.58.66c.44-.35.94-.61 1.47-.77zm1.4 4.55a2.45 2.45 0 100 4.9 2.45 2.45 0 000-4.9z"/></svg>
       </button>
       <button id="pp-shell-min" title="最小化" aria-label="最小化">
         <svg viewBox="0 0 10 10"><path fill="currentColor" d="M0 5h10v1H0z"/></svg>
@@ -120,29 +125,189 @@ const PAGE_PATCH = `(() => {
   Document.prototype.exitFullscreen = function () { return Promise.resolve(); };
 
   const hideLabels = new Set([
-    '账户', 'Account', '关于', 'About', '反馈错误', 'Report Bug', '学习', 'Learn', 'Blog', 'API',
+    '关于', 'About', '反馈错误', 'Report Bug', '学习', 'Learn', 'Blog', 'API',
     'Reddit', 'Twitter', 'Facebook', 'YouTube'
   ]);
+  const SOCIAL_RE = /reddit|twitter|facebook|fb\\.com|x\\.com|t\\.co|youtube|youtu\\.be/i;
   const AD_TEST = /googlesyndication|doubleclick|adservice|pagead|adnxs|360yield|prebid|marphezis/;
+  const leafText = (el) => (el.childElementCount ? '' : (el.textContent || '')).replace(/\\s+/g, ' ').trim();
+
   const hideEl = (el) => {
     if (!(el instanceof HTMLElement) || el.closest('#pp-shell-root')) return;
     const r = el.getBoundingClientRect();
-    if (r.top > 40 || r.height > 40 || r.width > 220) return;
+    if (r.top > 42 || r.height > 42) return;
     el.style.setProperty('display', 'none', 'important');
     el.style.setProperty('visibility', 'hidden', 'important');
     el.style.setProperty('pointer-events', 'none', 'important');
+    el.style.setProperty('width', '0', 'important');
+    el.style.setProperty('min-width', '0', 'important');
+    el.style.setProperty('margin', '0', 'important');
+    el.style.setProperty('padding', '0', 'important');
+    el.style.setProperty('opacity', '0', 'important');
   };
+
+  const paintAccount = (el) => {
+    if (!(el instanceof HTMLElement) || el.dataset.ppAcc === '1') return;
+    el.dataset.ppAcc = '1';
+    el.style.setProperty('background', '#5a5a5a', 'important');
+    el.style.setProperty('background-color', '#5a5a5a', 'important');
+    el.style.setProperty('background-image', 'none', 'important');
+    el.style.setProperty('color', '#e8e8e8', 'important');
+    el.style.setProperty('border', '0', 'important');
+    el.style.setProperty('box-shadow', 'none', 'important');
+    el.style.setProperty('outline', 'none', 'important');
+  };
+
+  const isSearchIcon = (el) => {
+    const meta = ((el.getAttribute('title') || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.innerHTML || '')).toLowerCase();
+    return /search|搜索|magnif|loupe|\\\\bm0[,\\s].*circle|\\\\ba\\s+circle/.test(meta);
+  };
+
+  const hideFullscreenNearAccount = () => {
+    const vw = realWidth();
+    let accountRight = 0;
+    const nodes = document.body ? document.body.querySelectorAll('a,button,div,span,canvas,svg') : [];
+    for (const el of nodes) {
+      if (el.closest('#pp-shell-root')) continue;
+      if (leafText(el) === '账户' || leafText(el) === 'Account') {
+        accountRight = Math.max(accountRight, el.getBoundingClientRect().right);
+      }
+    }
+    if (!accountRight) accountRight = vw * 0.35;
+    for (const el of nodes) {
+      if (el.closest('#pp-shell-root')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.top > 34 || r.height < 12 || r.height > 30 || r.width < 12 || r.width > 30) continue;
+      if (r.left < accountRight - 4) continue;
+      if (r.right > vw - 170) continue;
+      if (leafText(el)) continue;
+      if (isSearchIcon(el)) continue;
+      const title = ((el.getAttribute('title') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+      if (/search|搜索/.test(title)) continue;
+      const ratio = r.width / Math.max(r.height, 1);
+      if (ratio < 0.7 || ratio > 1.4) continue;
+      hideEl(el);
+      if (el.parentElement && el.parentElement.getBoundingClientRect().width < 40) hideEl(el.parentElement);
+    }
+  };
+
+  const hideSocialAndAbout = () => {
+    const nodes = document.body ? document.body.querySelectorAll('a,button,div,span,img,svg') : [];
+    for (const el of nodes) {
+      if (el.closest('#pp-shell-root')) continue;
+      const t = leafText(el);
+      if (hideLabels.has(t)) hideEl(el);
+      const href = el.getAttribute && (el.getAttribute('href') || el.getAttribute('src') || '') || '';
+      const title = ((el.getAttribute && el.getAttribute('title')) || '') + ' ' + ((el.getAttribute && el.getAttribute('aria-label')) || '');
+      if (SOCIAL_RE.test(href) || SOCIAL_RE.test(title)) {
+        hideEl(el);
+        if (el.parentElement) hideEl(el.parentElement);
+      }
+      if (/photopea\\.com\\/(learn|api|tuts|blog)/i.test(href)) hideEl(el);
+    }
+  };
+
+  // 真正的内置浮层弹窗（Plugins 资源库、新建/导出等），排除停靠面板
+  const isFloatDialog = (el) => {
+    if (!(el instanceof HTMLElement) || el.closest('#pp-shell-root')) return false;
+    const r = el.getBoundingClientRect();
+    const vw = realWidth();
+    const vh = window.innerHeight || 800;
+    if (r.width < 280 || r.height < 160) return false;
+    if (r.width > vw * 0.96 && r.height > vh * 0.9 && r.top < 8) return false;
+    const docked =
+      (r.left < 10 && r.width < vw * 0.4 && r.height > vh * 0.5) ||
+      (r.right > vw - 10 && r.width < vw * 0.4 && r.height > vh * 0.5);
+    if (docked) return false;
+    const text = el.textContent || '';
+    if (/Add Plugins/i.test(text) && /(AUTHORS|CATEGORIES)/i.test(text)) return true;
+    if (/Plugins/i.test(text) && /(模板|动作|图案|图形|LUTs|AUTHORS|CATEGORIES)/.test(text) && /(Hot|New|Top|Install|安装)/i.test(text)) return true;
+    if (/(新建项目|New Project|导出为|Export As|首选项|Preferences|打开自|Open From)/i.test(text) && r.width >= 320 && r.height >= 180) return true;
+    const cx = r.left + r.width / 2;
+    const centered = cx > vw * 0.22 && cx < vw * 0.78;
+    const floating = r.top >= 20 && r.top < vh * 0.28 && r.width >= Math.min(360, vw * 0.4) && r.height >= Math.min(200, vh * 0.32);
+    return centered && floating;
+  };
+
+  const findFloatDialog = () => {
+    if (!document.body) return null;
+    let best = null;
+    let bestArea = 0;
+    for (const el of document.body.querySelectorAll('div')) {
+      if (!isFloatDialog(el)) continue;
+      const r = el.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea) { best = el; bestArea = area; }
+    }
+    return best;
+  };
+
+  const freeFloatAncestors = (panel) => {
+    let p = panel;
+    while (p && p !== document.documentElement) {
+      if (p instanceof HTMLElement) {
+        const cs = getComputedStyle(p);
+        if (cs.overflow === 'hidden' || cs.overflowX === 'hidden' || cs.overflowY === 'hidden') {
+          p.style.setProperty('overflow', 'visible', 'important');
+          p.style.setProperty('overflow-x', 'visible', 'important');
+          p.style.setProperty('overflow-y', 'visible', 'important');
+        }
+        if (cs.clipPath && cs.clipPath !== 'none') p.style.setProperty('clip-path', 'none', 'important');
+        if (cs.clip && cs.clip !== 'auto') p.style.setProperty('clip', 'auto', 'important');
+      }
+      p = p.parentElement;
+    }
+  };
+
+  const elevateFloat = (panel) => {
+    if (!panel) return;
+    freeFloatAncestors(panel);
+    panel.style.setProperty('z-index', '8000', 'important');
+    panel.style.setProperty('pointer-events', 'auto', 'important');
+    panel.style.setProperty('visibility', 'visible', 'important');
+    panel.style.setProperty('opacity', '1', 'important');
+    // 不要强制改 position/尺寸，避免 Plugins 内容区空白
+  };
+
+  let lastFloatKey = '';
+  const syncFloatDialog = () => {
+    const panel = findFloatDialog();
+    const open = !!panel;
+    document.documentElement.classList.toggle('pp-float-open', open);
+    if (panel) elevateFloat(panel);
+
+    if (!window.ppShell || !window.ppShell.floatSpace) return;
+    if (!open) {
+      if (lastFloatKey) {
+        lastFloatKey = '';
+        window.ppShell.floatSpace({ active: false });
+      }
+      return;
+    }
+    const r = panel.getBoundingClientRect();
+    const key = [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)].join(',');
+    if (key === lastFloatKey) return;
+    lastFloatKey = key;
+    window.ppShell.floatSpace({
+      active: true,
+      left: r.left,
+      top: r.top,
+      right: r.right,
+      bottom: r.bottom
+    });
+  };
+
   const sweepChrome = () => {
+    hideSocialAndAbout();
+    hideFullscreenNearAccount();
     const nodes = document.body ? document.body.querySelectorAll('a,button,div,span') : [];
     for (const el of nodes) {
-      const t = (el.childElementCount ? '' : (el.textContent || '')).replace(/\\s+/g, ' ').trim();
-      if (hideLabels.has(t)) hideEl(el);
-      const href = (el.getAttribute && el.getAttribute('href')) || '';
-      if (/reddit|twitter|facebook|x\\.com|youtube|photopea\\.com\\/(learn|api|tuts)/i.test(href)) hideEl(el);
+      if (el.closest('#pp-shell-root')) continue;
+      const t = leafText(el);
+      if (t === '账户' || t === 'Account') paintAccount(el);
     }
     for (const iframe of document.querySelectorAll('iframe')) {
-      const src = iframe.src || '';
-      if (AD_TEST.test(src)) iframe.remove();
+      if (AD_TEST.test(iframe.src || '')) iframe.remove();
     }
   };
 
@@ -162,9 +327,9 @@ const PAGE_PATCH = `(() => {
     }
   };
 
-  const tick = () => { sweepChrome(); hideAdCol(); };
+  const tick = () => { sweepChrome(); hideAdCol(); syncFloatDialog(); };
   tick();
-  setInterval(tick, 800);
+  setInterval(tick, 400);
 })();`;
 
 const OPEN_RUNTIME = `(() => {
