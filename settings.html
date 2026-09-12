@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>文件关联</title>
+  <title>Settings</title>
   <style>
     html, body { margin: 0; height: 100%; background: #2d2d2d; color: #e6e6e6; font: 13px/1.45 "Segoe UI", "Microsoft YaHei UI", sans-serif; overflow: hidden; }
     body { display: flex; flex-direction: column; min-height: 100%; box-sizing: border-box; }
@@ -30,64 +30,108 @@
 </head>
 <body>
   <div id="bar">
-    <h1>文件格式绑定</h1>
-    <button id="close" title="关闭">✕</button>
+    <h1 data-i18n="title">File Format Associations</h1>
+    <button id="close" data-i18n-title="close" title="Close">✕</button>
   </div>
   <div id="wrap">
-    <p class="hint">勾选后，双击对应后缀会用本程序打开。取消勾选会解除本程序的关联。默认仅绑定 PSD。</p>
+    <p class="hint" data-i18n="hint"></p>
     <div id="groups"></div>
   </div>
   <div id="foot">
-    <button class="btn" id="all">全选</button>
-    <button class="btn" id="none">全不选</button>
-    <button class="btn" id="reset">恢复默认</button>
+    <button class="btn" id="all" data-i18n="all">Select all</button>
+    <button class="btn" id="none" data-i18n="none">Select none</button>
+    <button class="btn" id="reset" data-i18n="reset">Reset default</button>
     <span class="spacer"></span>
     <span class="status" id="status"></span>
-    <button class="btn btn-primary" id="save">保存并绑定</button>
+    <button class="btn btn-primary" id="save" data-i18n="save">Save & associate</button>
   </div>
   <script>
     const root = document.getElementById('groups');
     const checks = [];
+    let strings = {};
+    let selected = [];
+    let groups = [];
 
-    window.assoc.load().then(({ groups, selected }) => {
-    for (const g of groups) {
-      const box = document.createElement('div');
-      box.className = 'group';
-      box.innerHTML = `<h2>${g.title}</h2>`;
-      const items = document.createElement('div');
-      items.className = 'items';
-      for (const it of g.items) {
-        const lab = document.createElement('label');
-        const inp = document.createElement('input');
-        inp.type = 'checkbox';
-        inp.value = it.ext;
-        inp.checked = selected.includes(it.ext);
-        checks.push(inp);
-        lab.append(inp, document.createTextNode(it.name));
-        const ext = document.createElement('span');
-        ext.className = 'ext';
-        ext.textContent = '.' + it.ext;
-        lab.append(ext);
-        items.append(lab);
+    const S = (k) => strings[k] || k;
+
+    function applyChrome() {
+      document.documentElement.lang = document.documentElement.dataset.lang || 'en';
+      document.documentElement.dir = document.documentElement.dataset.rtl === '1' ? 'rtl' : 'ltr';
+      document.title = S('title');
+      for (const el of document.querySelectorAll('[data-i18n]')) {
+        el.textContent = S(el.getAttribute('data-i18n'));
       }
-      box.append(items);
-      root.append(box);
+      for (const el of document.querySelectorAll('[data-i18n-title]')) {
+        el.title = S(el.getAttribute('data-i18n-title'));
+      }
+      for (const h of root.querySelectorAll('h2[data-title-key]')) {
+        h.textContent = S(h.getAttribute('data-title-key'));
+      }
     }
 
-    const setAll = (on) => checks.forEach((c) => { c.checked = on; });
-    document.getElementById('all').onclick = () => setAll(true);
-    document.getElementById('none').onclick = () => setAll(false);
-    document.getElementById('reset').onclick = () => {
-      checks.forEach((c) => { c.checked = c.value === 'psd'; });
-    };
-    document.getElementById('close').onclick = () => window.assoc.close();
-    document.getElementById('save').onclick = async () => {
-      const exts = checks.filter((c) => c.checked).map((c) => c.value);
-      document.getElementById('status').textContent = '正在写入关联…';
-      await window.assoc.save(exts);
-      document.getElementById('status').textContent = '已保存';
-      setTimeout(() => { document.getElementById('status').textContent = ''; }, 1600);
-    };
+    function renderGroups() {
+      root.innerHTML = '';
+      checks.length = 0;
+      for (const g of groups) {
+        const box = document.createElement('div');
+        box.className = 'group';
+        const h2 = document.createElement('h2');
+        h2.setAttribute('data-title-key', g.titleKey || ('group.' + g.id));
+        h2.textContent = S(h2.getAttribute('data-title-key'));
+        box.append(h2);
+        const items = document.createElement('div');
+        items.className = 'items';
+        for (const it of g.items) {
+          const lab = document.createElement('label');
+          const inp = document.createElement('input');
+          inp.type = 'checkbox';
+          inp.value = it.ext;
+          inp.checked = selected.includes(it.ext);
+          checks.push(inp);
+          lab.append(inp, document.createTextNode(it.name));
+          const ext = document.createElement('span');
+          ext.className = 'ext';
+          ext.textContent = '.' + it.ext;
+          lab.append(ext);
+          items.append(lab);
+        }
+        box.append(items);
+        root.append(box);
+      }
+    }
+
+    function applyBundle(bundle) {
+      if (!bundle || !bundle.strings) return;
+      strings = bundle.strings;
+      document.documentElement.dataset.lang = bundle.lang || 'en';
+      document.documentElement.dataset.rtl = bundle.rtl ? '1' : '0';
+      applyChrome();
+    }
+
+    window.assoc.load().then((state) => {
+      groups = state.groups || [];
+      selected = state.selected || [];
+      applyBundle(state.i18n);
+      renderGroups();
+
+      const setAll = (on) => checks.forEach((c) => { c.checked = on; });
+      document.getElementById('all').onclick = () => setAll(true);
+      document.getElementById('none').onclick = () => setAll(false);
+      document.getElementById('reset').onclick = () => {
+        checks.forEach((c) => { c.checked = c.value === 'psd'; });
+      };
+      document.getElementById('close').onclick = () => window.assoc.close();
+      document.getElementById('save').onclick = async () => {
+        const exts = checks.filter((c) => c.checked).map((c) => c.value);
+        document.getElementById('status').textContent = S('saving');
+        await window.assoc.save(exts);
+        document.getElementById('status').textContent = S('saved');
+        setTimeout(() => { document.getElementById('status').textContent = ''; }, 1600);
+      };
+    });
+
+    window.assoc.onLang((bundle) => {
+      applyBundle(bundle);
     });
   </script>
 </body>

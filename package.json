@@ -8,7 +8,9 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win dir --x64",
-    "pack": "pack.bat"
+    "pack": "pack.bat",
+    "check:readme": "node scripts/check-readme-sync.js",
+    "check:i18n": "node -e \"const m=require('./i18n').assertComplete(); if(m.length){console.error(m.join('\\n')); process.exit(1)} console.log('i18n OK', require('./i18n').PP_LANG_CODES.length)\""
   },
   "devDependencies": {
     "electron": "^38.0.0",
@@ -22,6 +24,7 @@
       "preload.js",
       "pp-cache.js",
       "path-key.js",
+      "i18n.js",
       "settings.html",
       "settings-preload.js",
       "formats.js",

@@ -4,7 +4,10 @@ function showLoading(msg) {
   const el = document.getElementById('pp-shell-loading');
   const text = document.getElementById('pp-shell-loading-text');
   if (!el) return;
-  if (text) text.textContent = msg || '正在打开…';
+  if (text) {
+    text.textContent = msg || ipcRenderer.sendSync('i18n-bundle').strings.opening || 'Opening…';
+    text.dataset.ppDefault = '0';
+  }
   el.classList.add('show');
 }
 
@@ -30,6 +33,12 @@ contextBridge.exposeInMainWorld('ppShell', {
     try { return webUtils.getPathForFile(file) || ''; } catch (e) { return ''; }
   },
   isSupportedLocalPath,
+  reportLang: (code) => ipcRenderer.send('ui-lang', code),
+  i18n: (code) => ipcRenderer.sendSync('i18n-bundle', code),
+  t: (key, code) => {
+    const b = ipcRenderer.sendSync('i18n-bundle', code);
+    return (b && b.strings && b.strings[key]) || key;
+  },
   showLoading,
   hideLoading,
   maximize: () => ipcRenderer.send('win-max')
@@ -38,7 +47,11 @@ contextBridge.exposeInMainWorld('ppShell', {
 const css = `
 html,body{overflow:hidden!important}
 iframe[src*="googlesyndication"],iframe[src*="doubleclick"],iframe[src*="adservice"],iframe[src*="pagead"],ins.adsbygoogle,[id*="google_ads"]{display:none!important}
-#pp-shell-root{position:fixed;inset:0;pointer-events:none;z-index:5000}
+/* 壳层控件保持较低层级，编辑器内部弹窗可盖住拖拽区与窗口按钮 */
+#pp-shell-root{position:fixed;inset:0;pointer-events:none;z-index:30}
+#pp-shell-root.pp-shell-under-modal{z-index:0}
+#pp-shell-root.pp-shell-under-modal #pp-shell-drag,
+#pp-shell-root.pp-shell-under-modal #pp-shell-controls{visibility:hidden;pointer-events:none}
 #pp-shell-drag,#pp-shell-controls{position:absolute;top:0;height:29px;box-sizing:border-box}
 #pp-shell-drag{right:176px;width:88px;background:transparent;pointer-events:auto;-webkit-app-region:drag}
 #pp-shell-controls{right:0;display:flex;pointer-events:auto;-webkit-app-region:no-drag;background:transparent;padding-right:2px}
@@ -56,6 +69,25 @@ iframe[src*="googlesyndication"],iframe[src*="doubleclick"],iframe[src*="adservi
 @keyframes pp-spin{to{transform:rotate(360deg)}}
 `;
 
+function applyChromeI18n(code) {
+  const b = ipcRenderer.sendSync('i18n-bundle', code);
+  const s = (b && b.strings) || {};
+  const set = (id, title) => {
+    const el = document.getElementById(id);
+    if (el && title) el.title = title;
+  };
+  set('pp-shell-drag', s.drag);
+  set('pp-shell-settings', s.settings);
+  set('pp-shell-min', s.min);
+  set('pp-shell-max', s.max);
+  set('pp-shell-close', s.close);
+  const loading = document.getElementById('pp-shell-loading-text');
+  if (loading && (!loading.textContent || loading.dataset.ppDefault === '1')) {
+    loading.textContent = s.opening || 'Opening…';
+    loading.dataset.ppDefault = '1';
+  }
+}
+
 function injectChrome() {
   if (!document.documentElement) return;
 
@@ -71,29 +103,32 @@ function injectChrome() {
   const obsolete = document.getElementById('pp-shell-right');
   if (obsolete) obsolete.remove();
 
-  if (document.getElementById('pp-shell-root')) return;
+  if (document.getElementById('pp-shell-root')) {
+    applyChromeI18n();
+    return;
+  }
 
   const root = document.createElement('div');
   root.id = 'pp-shell-root';
   root.innerHTML = `
-    <div id="pp-shell-drag" title="拖动窗口"></div>
+    <div id="pp-shell-drag" title="Drag window"></div>
     <div id="pp-shell-controls">
-      <button id="pp-shell-settings" title="文件关联设置" aria-label="设置">
+      <button id="pp-shell-settings" title="Settings" aria-label="settings">
         <svg viewBox="0 0 14 14"><path fill="currentColor" d="M5.6 0h2.8l.35 1.65c.53.16 1.03.42 1.47.77l1.58-.66 1.98 1.98-.66 1.58c.35.44.61.94.77 1.47L14 5.6v2.8l-1.65.35c-.16.53-.42 1.03-.77 1.47l.66 1.58-1.98 1.98-1.58-.66c-.44.35-.94.61-1.47.77L8.4 14H5.6l-.35-1.65c-.53-.16-1.03-.42-1.47-.77l-1.58.66L.22 10.26l.66-1.58A4.9 4.9 0 01.72 7.2L0 8.4V5.6l1.65-.35c.16-.53.42-1.03.77-1.47L1.76 2.2 3.74.22l1.58.66c.44-.35.94-.61 1.47-.77zm1.4 4.55a2.45 2.45 0 100 4.9 2.45 2.45 0 000-4.9z"/></svg>
       </button>
-      <button id="pp-shell-min" title="最小化" aria-label="最小化">
+      <button id="pp-shell-min" title="Minimize" aria-label="minimize">
         <svg viewBox="0 0 10 10"><path fill="currentColor" d="M0 5h10v1H0z"/></svg>
       </button>
-      <button id="pp-shell-max" title="最大化" aria-label="最大化">
+      <button id="pp-shell-max" title="Maximize" aria-label="maximize">
         <svg id="pp-shell-max-icon" viewBox="0 0 10 10"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M1.2 1.2h7.6v7.6H1.2z"/></svg>
       </button>
-      <button id="pp-shell-close" title="关闭" aria-label="关闭">
+      <button id="pp-shell-close" title="Close" aria-label="close">
         <svg viewBox="0 0 10 10"><path fill="currentColor" d="M1 0l4 4 4-4 1 1-4 4 4 4-1 1-4-4-4 4-1-1 4-4-4-4z"/></svg>
       </button>
     </div>
     <div id="pp-shell-loading" aria-live="polite">
       <div id="pp-shell-spinner"></div>
-      <div id="pp-shell-loading-text">正在打开…</div>
+      <div id="pp-shell-loading-text" data-pp-default="1">Opening…</div>
     </div>`;
 
   document.documentElement.append(root);
@@ -101,6 +136,7 @@ function injectChrome() {
   document.getElementById('pp-shell-min').onclick = () => ipcRenderer.send('win-min');
   document.getElementById('pp-shell-max').onclick = () => ipcRenderer.send('win-max');
   document.getElementById('pp-shell-close').onclick = () => ipcRenderer.send('win-close');
+  applyChromeI18n();
 }
 
 const PAGE_PATCH = `(() => {
@@ -226,10 +262,72 @@ const PAGE_PATCH = `(() => {
     }
   };
 
+  // 内部浮层弹窗高于壳层按钮/拖拽区：检测后暂时让壳层退到下层并隐藏控件
+  const hasEditorModal = () => {
+    const vw = window.innerWidth || 1280;
+    const vh = window.innerHeight || 800;
+    for (const el of document.querySelectorAll('body div')) {
+      if (!(el instanceof HTMLElement) || el.closest('#pp-shell-root')) continue;
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden') continue;
+      if (st.position !== 'fixed' && st.position !== 'absolute') continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 260 || r.height < 160) continue;
+      if (r.top <= 2 && r.height > vh * 0.8 && r.width > vw * 0.8) continue; // 全屏层忽略
+      const cx = (r.left + r.right) / 2;
+      const centered = Math.abs(cx - vw / 2) < vw * 0.28 && r.top > 18 && r.top < vh * 0.4;
+      const coversChrome = r.right > vw - 200 && r.top < 64 && r.height > 120;
+      if (centered || coversChrome) return true;
+    }
+    return false;
+  };
+
+  const syncShellLayer = () => {
+    const root = document.getElementById('pp-shell-root');
+    if (!root) return;
+    root.classList.toggle('pp-shell-under-modal', hasEditorModal());
+  };
+
+  let lastLang = '';
+  const readPpLang = () => {
+    try {
+      if (window.ci && typeof window.ci.PB === 'function') {
+        const c = window.ci.PB();
+        if (c) return c;
+      }
+    } catch (e) {}
+    try {
+      if (window.locStor && window.locStor.getItem) {
+        const raw = window.locStor.getItem('0_stateLocal');
+        if (raw) {
+          const st = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (st && st.globals && st.globals.lang) return st.globals.lang;
+        }
+      }
+    } catch (e) {}
+    try {
+      const ppp = JSON.parse(localStorage.getItem('_ppp') || '{}');
+      const raw = ppp['0_stateLocal'];
+      if (raw) {
+        const st = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (st && st.globals && st.globals.lang) return st.globals.lang;
+      }
+    } catch (e) {}
+    return '';
+  };
+  const syncLang = () => {
+    const code = readPpLang();
+    if (!code || code === lastLang) return;
+    lastLang = code;
+    if (window.ppShell && window.ppShell.reportLang) window.ppShell.reportLang(code);
+  };
+
   const tick = () => {
     try {
       scrubNativeChrome();
       hideAdCol();
+      syncShellLayer();
+      syncLang();
     } catch (e) {}
   };
   setInterval(tick, 400);
@@ -474,6 +572,13 @@ const OPEN_RUNTIME = `(() => {
     bindings: () => [...openByPath.entries()]
   };
 
+  const tx = (key) => {
+    try {
+      if (window.ppShell && window.ppShell.t) return window.ppShell.t(key);
+    } catch (e) {}
+    return key;
+  };
+
   const openOne = async (payload) => {
     pruneBindings();
     if (payload && payload.path) {
@@ -485,7 +590,7 @@ const OPEN_RUNTIME = `(() => {
       }
     }
 
-    window.ppShell.showLoading('正在打开 ' + payload.name + '\\n读取文件…');
+    window.ppShell.showLoading(tx('opening').replace(/…$/, '') + ' ' + payload.name + '\\n' + tx('reading'));
     const native = await asFile(payload);
     const dt = new DataTransfer();
     dt.items.add(native);
@@ -501,7 +606,7 @@ const OPEN_RUNTIME = `(() => {
       docs: docCount(),
       canvas: canvasCount()
     };
-    window.ppShell.showLoading('正在打开 ' + payload.name + '\\n解析中，请稍候…');
+    window.ppShell.showLoading(tx('opening').replace(/…$/, '') + ' ' + payload.name + '\\n' + tx('parsing'));
     const input = findFileInput();
     if (input) {
       try {
@@ -518,7 +623,7 @@ const OPEN_RUNTIME = `(() => {
         if (payload.path) openByPath.set(pathKey(payload.path), payload.name);
         return;
       }
-      throw new Error('打开超时：' + payload.name);
+      throw new Error(tx('openFail') + ': ' + payload.name);
     }
     if (window.app) applyName(payload.name);
     if (payload.path) openByPath.set(pathKey(payload.path), payload.name);
@@ -531,7 +636,7 @@ const OPEN_RUNTIME = `(() => {
     try {
       const names = await window.ppShell.pendingNames();
       if (names && names.length) {
-        window.ppShell.showLoading('正在加载编辑器…\\n即将打开 ' + names[0]);
+        window.ppShell.showLoading(tx('loadingEditor') + '\\n' + tx('soonOpen') + ' ' + names[0]);
       }
       await waitReady(90000);
       while (true) {
@@ -553,11 +658,11 @@ const OPEN_RUNTIME = `(() => {
         }
       }
       if (lastError) {
-        window.ppShell.showLoading('打开失败\\n' + lastError);
+        window.ppShell.showLoading(tx('openFail') + '\\n' + lastError);
         await sleep(2800);
       }
     } catch (e) {
-      window.ppShell.showLoading('打开失败\\n' + ((e && e.message) || String(e)));
+      window.ppShell.showLoading(tx('openFail') + '\\n' + ((e && e.message) || String(e)));
       await sleep(2800);
     } finally {
       window.ppShell.hideLoading();
@@ -573,8 +678,13 @@ function waitAndOpen() {
   webFrame.executeJavaScript(OPEN_RUNTIME).then(() => webFrame.executeJavaScript('window.__ppDrainFiles()'));
 }
 
+ipcRenderer.on('lang-changed', (_e, pack) => {
+  applyChromeI18n(pack && pack.lang);
+});
+
 ipcRenderer.on('file-queued', (_e, names) => {
-  showLoading(names && names[0] ? ('正在打开 ' + names[0]) : '正在打开…');
+  const opening = ipcRenderer.sendSync('i18n-bundle').strings.opening || 'Opening…';
+  showLoading(names && names[0] ? (opening.replace(/…$/, '') + ' ' + names[0]) : opening);
   waitAndOpen();
 });
 ipcRenderer.on('win-max-state', (_e, max) => {
@@ -583,13 +693,22 @@ ipcRenderer.on('win-max-state', (_e, max) => {
   icon.innerHTML = max
     ? '<path fill="none" stroke="currentColor" stroke-width="1.1" d="M2.2 3.2h5.6v5.6H2.2zM3.2 2.2h5.6v5.6"/>'
     : '<path fill="none" stroke="currentColor" stroke-width="1.2" d="M1.2 1.2h7.6v7.6H1.2z"/>';
+  const maxBtn = document.getElementById('pp-shell-max');
+  if (maxBtn) {
+    const b = ipcRenderer.sendSync('i18n-bundle');
+    maxBtn.title = (b && b.strings && (max ? b.strings.restore : b.strings.max)) || maxBtn.title;
+  }
 });
 
 const boot = () => {
   injectChrome();
   setInterval(injectChrome, 800);
   ipcRenderer.invoke('pending-names').then((names) => {
-    if (names && names.length) showLoading('正在加载编辑器…\n即将打开 ' + names[0]);
+    const b = ipcRenderer.sendSync('i18n-bundle');
+    const s = (b && b.strings) || {};
+    if (names && names.length) {
+      showLoading((s.loadingEditor || 'Loading editor…') + '\n' + (s.soonOpen || '') + ' ' + names[0]);
+    }
     waitAndOpen();
   }).catch(() => waitAndOpen());
 };

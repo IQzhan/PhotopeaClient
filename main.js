@@ -4,6 +4,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const { GROUPS, DEFAULT_EXTS, isSupportedExt } = require('./formats');
 const { pathKey } = require('./path-key');
+const { bundle, normalizeLang, t } = require('./i18n');
 const {
   registerPpSchemes,
   installPpCache,
@@ -22,10 +23,24 @@ const AD_RE = /googlesyndication|doubleclick|adservice\.google|pagead2|googleads
 let win;
 let settingsWin;
 let ppCacheApi = null;
+let uiLang = 'en';
 const pendingFiles = [];
 const allowedFiles = new Set();
 
 registerPpSchemes();
+
+function setUiLang(code) {
+  const next = normalizeLang(code);
+  if (next === uiLang) return;
+  uiLang = next;
+  const pack = bundle(uiLang);
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('lang-changed', pack);
+  }
+  if (settingsWin && !settingsWin.isDestroyed()) {
+    settingsWin.webContents.send('lang-changed', pack);
+  }
+}
 
 function appExe() {
   return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
@@ -353,7 +368,7 @@ ipcMain.handle('take-file', async () => {
   if (!filePath) return null;
   if (!fs.existsSync(filePath)) {
     allowedFiles.delete(pathKey(filePath));
-    throw new Error('文件不存在: ' + path.basename(filePath));
+    throw new Error(t(uiLang, 'fileMissing') + ': ' + path.basename(filePath));
   }
   allowedFiles.add(pathKey(filePath));
   return {
@@ -385,7 +400,8 @@ ipcMain.on('is-supported-ext', (e, ext) => {
 
 ipcMain.handle('assoc-state', () => ({
   groups: GROUPS,
-  selected: loadExts()
+  selected: loadExts(),
+  i18n: bundle(uiLang)
 }));
 
 ipcMain.handle('assoc-save', async (_e, exts) => {
@@ -394,6 +410,11 @@ ipcMain.handle('assoc-save', async (_e, exts) => {
 });
 
 ipcMain.on('assoc-close', () => settingsWin?.close());
+ipcMain.on('ui-lang', (_e, code) => setUiLang(code));
+ipcMain.on('i18n-bundle', (e, code) => {
+  e.returnValue = bundle(code || uiLang);
+});
+ipcMain.handle('i18n-bundle-async', (_e, code) => bundle(code || uiLang));
 ipcMain.on('win-min', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize());
 ipcMain.on('win-max', (e) => {
   const w = BrowserWindow.fromWebContents(e.sender);

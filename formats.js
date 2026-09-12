@@ -2,7 +2,7 @@
 const GROUPS = [
   {
     id: 'project',
-    title: '工程 / 设计文件',
+    titleKey: 'group.project',
     items: [
       { ext: 'psd', name: 'Photoshop PSD' },
       { ext: 'psb', name: 'Photoshop PSB' },
@@ -33,7 +33,7 @@ const GROUPS = [
   },
   {
     id: 'raster',
-    title: '位图',
+    titleKey: 'group.raster',
     items: [
       { ext: 'png', name: 'PNG' },
       { ext: 'apng', name: 'APNG' },
@@ -67,7 +67,7 @@ const GROUPS = [
   },
   {
     id: 'raw',
-    title: 'RAW 相机',
+    titleKey: 'group.raw',
     items: [
       { ext: 'dng', name: 'DNG' },
       { ext: 'cr2', name: 'Canon CR2' },
@@ -84,7 +84,7 @@ const GROUPS = [
   },
   {
     id: 'video',
-    title: '动画 / 视频（按帧打开）',
+    titleKey: 'group.video',
     items: [
       { ext: 'mp4', name: 'MP4' },
       { ext: 'webm', name: 'WebM' },
