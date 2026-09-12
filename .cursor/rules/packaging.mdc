@@ -1,0 +1,32 @@
+---
+description: PhotopeaClient 打包与临时目录规范（禁止误杀 Cursor、禁止残缺包）
+alwaysApply: true
+---
+
+# 打包与仓库卫生
+
+## 目录
+
+| 路径 | 用途 |
+|------|------|
+| `release/PhotopeaClient/` | **唯一**可运行分发目录（exe + dll/pak/locales/resources） |
+| `release/PhotopeaClient-win-x64.zip` | 唯一 zip |
+| `.tmp/` | **全部**本地临时内容：打包中间产物、占用隔离、诊断脚本 |
+| `.tmp/staging/` | electron-builder 输出（打包后清理/隔离） |
+| `.tmp/trash/` | 无法删除的占用目录隔离区 |
+| `.tmp/diag/` | 诊断/冒烟脚本（勿放仓库根目录） |
+
+禁止再在仓库根创建 `dist*`、`_trash_*`、`_diag*`、`release-app`、`win-unpacked` 等散落目录。
+
+## 打包硬规则
+
+1. 只通过 `npm run pack` / `pack.bat` / `node scripts/pack-one.js` 产出。
+2. **完整目录才算成功**：至少含 `PhotopeaClient.exe`、≥8 个 dll、`resources/app.asar`、`locales/en-US.pak` 等；缺一不可。
+3. **禁止只拷贝/只替换 exe 或 asar**，否则必然打不开。
+4. 结束进程时 **只杀 `PhotopeaClient.exe`**。**禁止** `taskkill electron.exe`（会关掉 Cursor）。
+5. 遇文件占用：改名隔离进 `.tmp/trash/`，不要留下残缺的 `release` 半成品。
+6. `.gitignore` 只忽略：`node_modules/`、`.tmp/`、`release/`、`*.log`、`.DS_Store`。不要堆一长串散落通配符。
+
+## 给用户的路径
+
+告诉用户运行：`release\PhotopeaClient\PhotopeaClient.exe`（整夹一起用）。

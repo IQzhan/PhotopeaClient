@@ -41,17 +41,15 @@ contextBridge.exposeInMainWorld('ppShell', {
   },
   showLoading,
   hideLoading,
-  maximize: () => ipcRenderer.send('win-max')
+  maximize: () => ipcRenderer.send('win-max'),
+  forceClose: () => ipcRenderer.send('force-win-close')
 });
 
 const css = `
 html,body{overflow:hidden!important}
 iframe[src*="googlesyndication"],iframe[src*="doubleclick"],iframe[src*="adservice"],iframe[src*="pagead"],ins.adsbygoogle,[id*="google_ads"]{display:none!important}
-/* 壳层控件保持较低层级，编辑器内部弹窗可盖住拖拽区与窗口按钮 */
-#pp-shell-root{position:fixed;inset:0;pointer-events:none;z-index:30}
-#pp-shell-root.pp-shell-under-modal{z-index:0}
-#pp-shell-root.pp-shell-under-modal #pp-shell-drag,
-#pp-shell-root.pp-shell-under-modal #pp-shell-controls{visibility:hidden;pointer-events:none}
+/* 壳层仅略高于普通顶栏；内部弹窗由运行时抬升 z-index，禁止用隐藏按钮规避重叠 */
+#pp-shell-root{position:fixed;top:0;left:0;width:100vw;height:100vh;right:auto;bottom:auto;pointer-events:none;z-index:50}
 #pp-shell-drag,#pp-shell-controls{position:absolute;top:0;height:29px;box-sizing:border-box}
 #pp-shell-drag{right:176px;width:88px;background:transparent;pointer-events:auto;-webkit-app-region:drag}
 #pp-shell-controls{right:0;display:flex;pointer-events:auto;-webkit-app-region:no-drag;background:transparent;padding-right:2px}
@@ -105,6 +103,9 @@ function injectChrome() {
 
   if (document.getElementById('pp-shell-root')) {
     applyChromeI18n();
+    // 确保挂在 body 上，与编辑器浮层处于同一层叠父级
+    const root = document.getElementById('pp-shell-root');
+    if (root && document.body && root.parentElement !== document.body) document.body.append(root);
     return;
   }
 
@@ -131,7 +132,7 @@ function injectChrome() {
       <div id="pp-shell-loading-text" data-pp-default="1">Opening…</div>
     </div>`;
 
-  document.documentElement.append(root);
+  (document.body || document.documentElement).append(root);
   document.getElementById('pp-shell-settings').onclick = () => ipcRenderer.send('win-settings');
   document.getElementById('pp-shell-min').onclick = () => ipcRenderer.send('win-min');
   document.getElementById('pp-shell-max').onclick = () => ipcRenderer.send('win-max');
@@ -262,30 +263,151 @@ const PAGE_PATCH = `(() => {
     }
   };
 
-  // 内部浮层弹窗高于壳层按钮/拖拽区：检测后暂时让壳层退到下层并隐藏控件
-  const hasEditorModal = () => {
-    const vw = window.innerWidth || 1280;
-    const vh = window.innerHeight || 800;
-    for (const el of document.querySelectorAll('body div')) {
-      if (!(el instanceof HTMLElement) || el.closest('#pp-shell-root')) continue;
-      const st = window.getComputedStyle(el);
-      if (st.display === 'none' || st.visibility === 'hidden') continue;
-      if (st.position !== 'fixed' && st.position !== 'absolute') continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 260 || r.height < 160) continue;
-      if (r.top <= 2 && r.height > vh * 0.8 && r.width > vw * 0.8) continue; // 全屏层忽略
-      const cx = (r.left + r.right) / 2;
-      const centered = Math.abs(cx - vw / 2) < vw * 0.28 && r.top > 18 && r.top < vh * 0.4;
-      const coversChrome = r.right > vw - 200 && r.top < 64 && r.height > 120;
-      if (centered || coversChrome) return true;
-    }
-    return false;
+  // 内部浮层层级（严禁再 DOM 挪移弹窗：会打断 Photopea 关闭逻辑，造成关不掉的孤儿窗）
+  // - 壳层保持可见按钮（z=50）
+  // - 仅当存在可见的 div.window 时：短暂让编辑器根高于壳层，使弹窗盖住右上角
+  // - 只抬 .window 自身 z-index，不 appendChild / 不改 left/top
+  const SHELL_Z = 50;
+  const ABOVE_SHELL_Z = 100000;
+
+  const isAppRoot = (el) => !!(el && el.classList && el.classList.contains('flexrow') && el.classList.contains('app'));
+
+  const isSideDock = (r, vw, vh) => {
+    const tall = r.height > vh * 0.45;
+    const narrow = r.width < 420;
+    const onRight = r.left > vw * 0.55;
+    const onLeft = r.right < vw * 0.45;
+    return tall && narrow && (onRight || onLeft);
   };
 
-  const syncShellLayer = () => {
-    const root = document.getElementById('pp-shell-root');
-    if (!root) return;
-    root.classList.toggle('pp-shell-under-modal', hasEditorModal());
+  const layoutSize = () => {
+    const vw = realWidth();
+    const vh = (window.visualViewport && window.visualViewport.height > 0)
+      ? Math.round(window.visualViewport.height)
+      : (document.documentElement.clientHeight || 800);
+    return { vw, vh };
+  };
+
+  // 仅识别 Photopea 标准浮动窗口（新建/插件等），不把下拉菜单、停靠栏算进来
+  const isPpWindow = (el) => {
+    if (!(el instanceof HTMLElement) || el.closest('#pp-shell-root')) return false;
+    if (!el.classList || !el.classList.contains('window')) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+    const { vw, vh } = layoutSize();
+    const r = el.getBoundingClientRect();
+    if (r.width < 160 || r.height < 80) return false;
+    if (isSideDock(r, vw, vh)) return false;
+    return true;
+  };
+
+  // 清理历史方案遗留：曾被挪到 body 上、Photopea 已无法管理的孤儿窗
+  const purgeOrphanElevated = () => {
+    for (const el of document.querySelectorAll('[data-pp-elevated="1"]')) {
+      try {
+        el.removeAttribute('data-pp-elevated');
+        // 仍挂在 body 上的 .window 多半是挪 DOM 后的残骸；直接移除以恢复可交互
+        if (el.parentElement === document.body && el.classList && el.classList.contains('window')) {
+          el.remove();
+          continue;
+        }
+        el.style.removeProperty('position');
+        el.style.removeProperty('left');
+        el.style.removeProperty('top');
+        el.style.removeProperty('right');
+        el.style.removeProperty('bottom');
+        el.style.removeProperty('margin');
+        el.style.removeProperty('z-index');
+        el.style.removeProperty('pointer-events');
+      } catch (e) {}
+    }
+  };
+
+  let elevating = false;
+  let purgedOnce = false;
+  const elevateEditorFloats = () => {
+    if (elevating) return;
+    elevating = true;
+    try {
+      if (!purgedOnce) {
+        purgedOnce = true;
+        purgeOrphanElevated();
+      }
+
+      const windows = [];
+      for (const el of document.querySelectorAll('div.window')) {
+        if (!isPpWindow(el)) continue;
+        windows.push(el);
+        // 只抬 z-index，绝不挪 DOM、不锁 left/top
+        if (el.style.zIndex !== String(ABOVE_SHELL_Z)) {
+          el.style.setProperty('z-index', String(ABOVE_SHELL_Z), 'important');
+        }
+      }
+
+      const root = document.getElementById('pp-shell-root');
+      const app = document.querySelector('body > div.flexrow.app') || document.querySelector('div.flexrow.app');
+      const { vw: layoutW, vh: layoutH } = layoutSize();
+      const hasWindow = windows.length > 0;
+
+      if (root) {
+        root.classList.remove('pp-shell-under-modal');
+        root.style.visibility = '';
+        root.style.position = 'fixed';
+        root.style.top = '0px';
+        root.style.left = '0px';
+        root.style.width = layoutW + 'px';
+        root.style.height = layoutH + 'px';
+        root.style.right = 'auto';
+        root.style.bottom = 'auto';
+        root.style.maxWidth = 'none';
+        root.style.maxHeight = 'none';
+        root.style.transform = 'none';
+
+        // 有标准弹窗：编辑器根短暂高于壳层（弹窗在其内才能盖住按钮）；无弹窗立即恢复，避免按钮被顶栏盖住
+        if (hasWindow) {
+          root.style.zIndex = '1';
+          if (app) app.style.setProperty('z-index', '2', 'important');
+        } else {
+          root.style.zIndex = String(SHELL_Z);
+          if (app && app.style.zIndex) app.style.removeProperty('z-index');
+        }
+
+        if (document.body && (root.parentElement !== document.body || root.nextSibling !== null)) {
+          document.body.append(root);
+        }
+
+        const drag = document.getElementById('pp-shell-drag');
+        const controls = document.getElementById('pp-shell-controls');
+        if (drag) {
+          drag.style.visibility = '';
+          drag.style.pointerEvents = 'auto';
+          const want = hasWindow ? 'no-drag' : 'drag';
+          if (drag.style.webkitAppRegion !== want) drag.style.webkitAppRegion = want;
+        }
+        if (controls) {
+          controls.style.visibility = '';
+          controls.style.pointerEvents = 'auto';
+        }
+      } else if (app && app.style.zIndex) {
+        app.style.removeProperty('z-index');
+      }
+    } finally {
+      elevating = false;
+    }
+  };
+
+  let elevateTimer = 0;
+  const scheduleElevate = () => {
+    elevateEditorFloats();
+    if (elevateTimer) clearTimeout(elevateTimer);
+    requestAnimationFrame(() => {
+      elevateEditorFloats();
+      elevateTimer = setTimeout(() => {
+        elevateEditorFloats();
+        setTimeout(elevateEditorFloats, 100);
+        setTimeout(elevateEditorFloats, 300);
+      }, 0);
+    });
   };
 
   let lastLang = '';
@@ -313,25 +435,160 @@ const PAGE_PATCH = `(() => {
         if (st && st.globals && st.globals.lang) return st.globals.lang;
       }
     } catch (e) {}
+    try {
+      const raw = localStorage.getItem('0_stateLocal');
+      if (raw) {
+        const st = JSON.parse(raw);
+        if (st && st.globals && st.globals.lang) return st.globals.lang;
+      }
+    } catch (e) {}
     return '';
   };
-  const syncLang = () => {
+  const syncLang = (force) => {
     const code = readPpLang();
-    if (!code || code === lastLang) return;
+    if (!code) return;
+    if (!force && code === lastLang) return;
     lastLang = code;
     if (window.ppShell && window.ppShell.reportLang) window.ppShell.reportLang(code);
+  };
+  window.__ppPullLang = () => syncLang(true);
+
+  // 语言写入本地存储时立即同步（设置窗依赖此推送）
+  const hookStore = (stor) => {
+    if (!stor || stor.__ppLangHook) return;
+    try {
+      const orig = stor.setItem.bind(stor);
+      stor.setItem = function (k, v) {
+        const ret = orig(k, v);
+        const key = String(k || '');
+        if (key.indexOf('stateLocal') >= 0 || key === '_ppp' || key.indexOf('lang') >= 0) {
+          setTimeout(() => syncLang(true), 0);
+        }
+        return ret;
+      };
+      stor.__ppLangHook = true;
+    } catch (e) {}
+  };
+  hookStore(window.locStor);
+  hookStore(window.localStorage);
+  try {
+    if (window.locStor && !window.locStor.__ppLangHookWatch) {
+      window.locStor.__ppLangHookWatch = true;
+    }
+  } catch (e) {}
+
+  // —— 窗口关闭：逐个点标签 ×（与手动关标签同一套未保存确认），全部关掉后再关壳层 ——
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const findTabCloseBtns = () => {
+    const out = [];
+    for (const el of document.querySelectorAll('span.cross, .cross.gsicon, span.gsicon.cross')) {
+      if (!(el instanceof HTMLElement) || el.closest('#pp-shell-root')) continue;
+      if (el.closest('div.window')) continue; // 排除弹窗上的 ×
+      const r = el.getBoundingClientRect();
+      if (r.width < 6 || r.height < 6 || r.width > 40 || r.height > 40) continue;
+      if (r.top < 36 || r.top > 130) continue;
+      out.push(el);
+    }
+    // 按从右到左关，减少布局跳动
+    out.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left);
+    return out;
+  };
+  const clickEl = (el) => {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window };
+    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  };
+
+  window.__ppRequestAppClose = async () => {
+    if (window.__ppClosing) return;
+    window.__ppClosing = true;
+    try {
+      // 没有文档标签：直接关
+      let btns = findTabCloseBtns();
+      while (btns.length) {
+        const before = btns.length;
+        clickEl(btns[0]);
+        let ok = false;
+        let sawModal = false;
+        const t0 = Date.now();
+        while (Date.now() - t0 < 180000) {
+          await sleep(120);
+          const now = findTabCloseBtns().length;
+          if (now < before) { ok = true; break; }
+          if (document.querySelector('div.window')) sawModal = true;
+          else if (sawModal) {
+            await sleep(200);
+            // 弹过未保存框又消失，但标签还在 → 用户取消
+            if (findTabCloseBtns().length >= before) { ok = false; break; }
+            ok = true;
+            break;
+          } else if (!sawModal && Date.now() - t0 > 2500) {
+            // 无确认框却关不掉：避免死循环
+            ok = false;
+            break;
+          }
+        }
+        if (!ok) {
+          window.__ppClosing = false;
+          return;
+        }
+        btns = findTabCloseBtns();
+      }
+      if (window.ppShell && window.ppShell.forceClose) window.ppShell.forceClose();
+      else if (window.ppShell) { /* noop */ }
+    } catch (e) {
+      window.__ppClosing = false;
+    }
   };
 
   const tick = () => {
     try {
       scrubNativeChrome();
       hideAdCol();
-      syncShellLayer();
-      syncLang();
+      elevateEditorFloats();
+      syncLang(false);
+      hookStore(window.locStor);
     } catch (e) {}
   };
-  setInterval(tick, 400);
+  setInterval(tick, 300);
   tick();
+  window.addEventListener('resize', scheduleElevate, { passive: true });
+
+  // 打开弹窗通常由点击触发：不必等拖拽/轮询
+  document.addEventListener('pointerdown', scheduleElevate, true);
+  document.addEventListener('click', scheduleElevate, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      purgeOrphanElevated();
+      scheduleElevate();
+      return;
+    }
+    if (e.key === 'Enter' || e.key === ' ') scheduleElevate();
+  }, true);
+
+  try {
+    const mo = new MutationObserver(() => {
+      if (elevating) return;
+      scheduleElevate();
+    });
+    const startMo = () => {
+      if (!document.body) return;
+      mo.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'hidden']
+      });
+    };
+    if (document.body) startMo();
+    else document.addEventListener('DOMContentLoaded', startMo, { once: true });
+  } catch (e) {}
 })();`;
 
 const OPEN_RUNTIME = `(() => {
@@ -673,6 +930,14 @@ const OPEN_RUNTIME = `(() => {
   };
 })();`;
 
+try {
+  // 确保 PAGE_PATCH 可解析，避免静默失败导致壳层/层级逻辑整段不生效
+  // eslint-disable-next-line no-new-func
+  new Function(PAGE_PATCH);
+} catch (err) {
+  console.error('[PhotopeaClient] PAGE_PATCH syntax error', err);
+}
+
 function waitAndOpen() {
   webFrame.executeJavaScript(PAGE_PATCH);
   webFrame.executeJavaScript(OPEN_RUNTIME).then(() => webFrame.executeJavaScript('window.__ppDrainFiles()'));
@@ -680,6 +945,16 @@ function waitAndOpen() {
 
 ipcRenderer.on('lang-changed', (_e, pack) => {
   applyChromeI18n(pack && pack.lang);
+});
+
+ipcRenderer.on('pull-lang', () => {
+  webFrame.executeJavaScript('window.__ppPullLang && window.__ppPullLang()').catch(() => {});
+});
+
+ipcRenderer.on('request-app-close', () => {
+  webFrame.executeJavaScript(
+    'window.__ppRequestAppClose ? window.__ppRequestAppClose() : (window.ppShell && window.ppShell.forceClose && window.ppShell.forceClose())'
+  ).catch(() => { ipcRenderer.send('force-win-close'); });
 });
 
 ipcRenderer.on('file-queued', (_e, names) => {

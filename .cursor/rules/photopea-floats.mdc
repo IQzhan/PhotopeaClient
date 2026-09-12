@@ -1,0 +1,23 @@
+---
+description: Photopea 内部弹窗层级：禁止挪 DOM，避免关不掉的悬浮窗
+alwaysApply: true
+---
+
+# 弹窗层级（preload PAGE_PATCH）
+
+## 根因备忘
+
+把 `.window` `appendChild` 到 `body` 并锁 `position:fixed`/`left`/`top`，会打断 Photopea 自己的关闭与生命周期，出现**无法关闭的悬浮窗**。
+
+## 允许
+
+- 仅对可见的 `div.window` 设置更高 `z-index`
+- **仅当**存在这类窗口时，短暂 `app` z-index > 壳层；关闭后立即恢复壳层 z-index=50
+- 启动时清理历史 `[data-pp-elevated]` 孤儿节点
+
+## 禁止
+
+- 禁止把弹窗/菜单 DOM 挪到 `body` 或其它容器
+- 禁止用 `visibility:hidden` 藏壳层按钮来“解决”重叠
+- 禁止在无 `div.window` 时抬升整个 `.flexrow.app`（会盖住右上角按钮）
+- 禁止 `taskkill electron.exe`

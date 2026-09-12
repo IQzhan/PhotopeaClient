@@ -1,16 +1,12 @@
+# 依赖
 node_modules/
-dist/
-dist-fresh/
-dist-build-*/
-dist-staging/
+
+# 本地临时区（诊断/占用隔离/打包中间产物）
+.tmp/
+
+# 唯一分发产物
 release/
-_trash_dist_*/
-out/
+
+# 杂项
 *.log
 .DS_Store
-_shot*.png
-_pack_test.psd
-_diag*.js
-_diag*.json
-*.asar
-_test_*.js

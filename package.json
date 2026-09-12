@@ -9,6 +9,7 @@
     "start": "electron .",
     "build": "node scripts/pack-one.js",
     "pack": "node scripts/pack-one.js",
+    "kill-app": "node scripts/kill-app.js",
     "check:readme": "node scripts/check-readme-sync.js",
     "check:i18n": "node -e \"const m=require('./i18n').assertComplete(); if(m.length){console.error(m.join('\\n')); process.exit(1)} console.log('i18n OK', require('./i18n').PP_LANG_CODES.length)\""
   },

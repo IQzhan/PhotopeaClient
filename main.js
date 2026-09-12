@@ -31,15 +31,21 @@ registerPpSchemes();
 
 function setUiLang(code) {
   const next = normalizeLang(code);
-  if (next === uiLang) return;
+  const pack = bundle(next);
+  const changed = next !== uiLang;
   uiLang = next;
-  const pack = bundle(uiLang);
   if (win && !win.isDestroyed()) {
     win.webContents.send('lang-changed', pack);
   }
   if (settingsWin && !settingsWin.isDestroyed()) {
     settingsWin.webContents.send('lang-changed', pack);
   }
+  return changed;
+}
+
+function pushLangToSettings() {
+  if (!settingsWin || settingsWin.isDestroyed()) return;
+  settingsWin.webContents.send('lang-changed', bundle(uiLang));
 }
 
 function appExe() {
@@ -262,6 +268,12 @@ function createWindow() {
 
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { win = null; });
+  // 有未保存文档时，先走渲染进程逐个关标签（弹出与点标签 × 相同的确认框），完成后再关窗口
+  win.on('close', (e) => {
+    if (win.__ppForceClose) return;
+    e.preventDefault();
+    try { win.webContents.send('request-app-close'); } catch (err) {}
+  });
   win.on('maximize', () => win.webContents.send('win-max-state', true));
   win.on('unmaximize', () => win.webContents.send('win-max-state', false));
   win.on('enter-html-full-screen', () => {
@@ -315,9 +327,17 @@ function createWindow() {
 }
 
 function openSettings() {
+  const afterReady = () => {
+    // 打开/聚焦时向编辑器拉一次语言，并立刻推给设置窗
+    if (win && !win.isDestroyed()) {
+      try { win.webContents.send('pull-lang'); } catch (e) {}
+    }
+    pushLangToSettings();
+  };
   if (settingsWin) {
     settingsWin.show();
     settingsWin.focus();
+    afterReady();
     return;
   }
   settingsWin = new BrowserWindow({
@@ -343,7 +363,9 @@ function openSettings() {
   settingsWin.loadFile(path.join(__dirname, 'settings.html'));
   settingsWin.once('ready-to-show', () => {
     try { settingsWin.setContentSize(560, 680); } catch (e) {}
+    afterReady();
   });
+  settingsWin.webContents.on('did-finish-load', () => afterReady());
   settingsWin.on('closed', () => { settingsWin = null; });
 }
 
@@ -422,7 +444,18 @@ ipcMain.on('win-max', (e) => {
   if (w.isMaximized()) w.unmaximize();
   else w.maximize();
 });
-ipcMain.on('win-close', (e) => BrowserWindow.fromWebContents(e.sender)?.close());
+// 壳层关闭：交由页面逐个处理未保存标签，再 force-close
+ipcMain.on('win-close', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w) return;
+  try { w.webContents.send('request-app-close'); } catch (err) {}
+});
+ipcMain.on('force-win-close', (e) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w.isDestroyed()) return;
+  w.__ppForceClose = true;
+  w.close();
+});
 ipcMain.on('win-settings', () => openSettings());
 
 const gotLock = app.requestSingleInstanceLock();
