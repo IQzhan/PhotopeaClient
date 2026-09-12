@@ -107,10 +107,10 @@ npm run build
 
 | 路径 | 说明 |
 |------|------|
-| `dist\win-unpacked\` | **完整可运行目录**（发给别人就发这个文件夹） |
-| `dist\win-unpacked\PhotopeaClient.exe` | 主程序 |
-| `dist\win-unpacked\associations.json` | 默认关联配置（和 exe 放一起） |
-| `dist\PhotopeaClient-win-x64.zip` | `pack.bat` 额外打的压缩包（方便传） |
+| `release\win-unpacked\` | **完整可运行目录**（发给别人就发这个文件夹；每次打包只保留这一份） |
+| `release\win-unpacked\PhotopeaClient.exe` | 主程序 |
+| `release\win-unpacked\associations.json` | 默认关联配置（和 exe 放一起） |
+| `release\PhotopeaClient-win-x64.zip` | 额外打的压缩包（方便传） |
 
 > 不要只发一个 `PhotopeaClient.exe`。旁边的 dll、`resources` 等必须一起带走，否则别人打不开。
 
@@ -133,7 +133,7 @@ set CSC_IDENTITY_AUTO_DISCOVERY=false
 
 ### 发给其他人
 
-1. 把整个 `win-unpacked` 文件夹（或 zip 解压后的整包）拷过去。
+1. 把整个 `release\win-unpacked` 文件夹（或 zip 解压后的整包）拷过去。
 2. 对方**先运行一次** `PhotopeaClient.exe`（会按当前路径写入关联；默认含 `.psd`）。
 3. 需要更多格式时，在设置里勾选并保存。
 4. 若本机 PSD 已被 Photoshop / GIMP 等设成「始终用某某打开」，可能还要在「打开方式」或 Windows「默认应用」里选一次本程序。
@@ -261,10 +261,10 @@ Outputs:
 
 | Path | Meaning |
 |------|------|
-| `dist\win-unpacked\` | **Full runnable folder** (ship this entire folder) |
-| `dist\win-unpacked\PhotopeaClient.exe` | Main executable |
-| `dist\win-unpacked\associations.json` | Default associations (beside the exe) |
-| `dist\PhotopeaClient-win-x64.zip` | Extra zip from `pack.bat` |
+| `release\win-unpacked\` | **Full runnable folder** (ship this entire folder; each pack keeps only this one) |
+| `release\win-unpacked\PhotopeaClient.exe` | Main executable |
+| `release\win-unpacked\associations.json` | Default associations (beside the exe) |
+| `release\PhotopeaClient-win-x64.zip` | Extra zip for sharing |
 
 > Do not ship only `PhotopeaClient.exe`. DLLs, `resources`, etc. must travel with it.
 
@@ -287,7 +287,7 @@ set CSC_IDENTITY_AUTO_DISCOVERY=false
 
 ### Sharing with others
 
-1. Copy the whole `win-unpacked` folder (or the unzipped pack).
+1. Copy the whole `release\win-unpacked` folder (or the unzipped pack).
 2. Recipients should **run `PhotopeaClient.exe` once** (writes associations for the current path; includes `.psd` by default).
 3. Enable more formats in Settings if needed.
 4. If another app already owns PSD “always open with…”, pick this app once in Open with / Default apps.

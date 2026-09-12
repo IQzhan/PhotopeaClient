@@ -2,11 +2,15 @@ node_modules/
 dist/
 dist-fresh/
 dist-build-*/
+dist-staging/
+release/
+_trash_dist_*/
 out/
 *.log
 .DS_Store
 _shot*.png
 _pack_test.psd
 _diag*.js
+_diag*.json
 *.asar
 _test_*.js

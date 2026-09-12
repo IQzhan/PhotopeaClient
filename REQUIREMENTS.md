@@ -63,7 +63,7 @@
 ## 8. 分发
 
 - 提供一键打包脚本：`pack.bat`（Windows）与 `pack.sh`。
-- 产物为可独立运行的 exe 及完整依赖目录（`dist/win-unpacked`），并打 zip。
+- 产物为可独立运行的 exe 及完整依赖目录（唯一目录 `release/win-unpacked`），并打 zip（`release/PhotopeaClient-win-x64.zip`）。每次打包清理旧产物，只保留这一份，避免多目录混乱。
 - **分发给他人时不需要 Node.js 或本仓库开发环境**。打包机需要 Node.js。
 - 打包产物（含 `app.asar`）勿提交进版本库。
 
