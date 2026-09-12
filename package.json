@@ -21,6 +21,7 @@
       "main.js",
       "preload.js",
       "pp-cache.js",
+      "path-key.js",
       "settings.html",
       "settings-preload.js",
       "formats.js",

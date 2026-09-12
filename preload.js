@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, webFrame } = require('electron');
+const { contextBridge, ipcRenderer, webFrame, webUtils } = require('electron');
 
 function showLoading(msg) {
   const el = document.getElementById('pp-shell-loading');
@@ -13,10 +13,23 @@ function hideLoading() {
   if (el) el.classList.remove('show');
 }
 
+function isSupportedLocalPath(p) {
+  if (!p || typeof p !== 'string') return false;
+  const base = p.split(/[/\\]/).pop() || '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return false;
+  return !!ipcRenderer.sendSync('is-supported-ext', base.slice(dot + 1).toLowerCase());
+}
+
 contextBridge.exposeInMainWorld('ppShell', {
   takeFile: () => ipcRenderer.invoke('take-file'),
   hasPending: () => ipcRenderer.invoke('has-pending'),
   pendingNames: () => ipcRenderer.invoke('pending-names'),
+  enqueuePaths: (paths) => ipcRenderer.invoke('enqueue-paths', paths),
+  pathForFile: (file) => {
+    try { return webUtils.getPathForFile(file) || ''; } catch (e) { return ''; }
+  },
+  isSupportedLocalPath,
   showLoading,
   hideLoading,
   maximize: () => ipcRenderer.send('win-max')
@@ -368,15 +381,121 @@ const OPEN_RUNTIME = `(() => {
     }
   };
 
+  // path → 文档页签名；关闭页签后删除，允许再次打开
+  const openByPath = new Map();
+  let syntheticOpen = false;
+
+  const pathKey = (p) => String(p || '')
+    .normalize('NFC')
+    .replace(/\\\\/g, '/')
+    .replace(/^([A-Za-z]):/, (_, d) => d.toLowerCase() + ':')
+    .replace(/\\/+/g, '/')
+    .replace(/\\/$/, '');
+
+  const findDocTabEl = (name) => {
+    for (const el of document.querySelectorAll('span, div, button, label')) {
+      if (el.closest('#pp-shell-root')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom < 16 || r.top > 110 || r.height > 48 || r.width < 20) continue;
+      const t = canon(el.textContent || '');
+      if (!t || t.length > 120 || !/\\.[a-z0-9]{2,5}$/i.test(t)) continue;
+      if (nameMatches(t, name)) return el;
+    }
+    return null;
+  };
+
+  const focusDocTab = (name) => {
+    const el = findDocTabEl(name);
+    if (!el) return false;
+    const clickable = el.closest('button, [role="tab"], div') || el;
+    try { clickable.click(); } catch (e) { try { el.click(); } catch (e2) {} }
+    return true;
+  };
+
+  const pruneBindings = () => {
+    for (const [key, name] of [...openByPath.entries()]) {
+      if (!hasDocTabNamed(name)) openByPath.delete(key);
+    }
+  };
+  setInterval(pruneBindings, 700);
+
+  const pathsFromFileList = (list) => {
+    const out = [];
+    if (!list || !list.length || !window.ppShell || !window.ppShell.pathForFile) return out;
+    for (const f of list) {
+      try {
+        const p = window.ppShell.pathForFile(f);
+        if (!p) continue;
+        if (window.ppShell.isSupportedLocalPath && !window.ppShell.isSupportedLocalPath(p)) continue;
+        out.push(p);
+      } catch (e) {}
+    }
+    return out;
+  };
+
+  // 拖拽 / 编辑器内打开：能拿到本地路径的，统一走 enqueue → openOne
+  document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types && [...e.dataTransfer.types].includes('Files')) {
+      e.preventDefault();
+    }
+  }, true);
+
+  document.addEventListener('drop', (e) => {
+    if (syntheticOpen) return;
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+    const paths = pathsFromFileList(files);
+    if (!paths.length) return; // 无本地路径或不支持格式 → 交给 Photopea
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    window.ppShell.enqueuePaths(paths);
+  }, true);
+
+  const hookFileInput = () => {
+    const input = findFileInput();
+    if (!input || input.dataset.ppPathHook === '1') return;
+    input.dataset.ppPathHook = '1';
+    input.addEventListener('change', (e) => {
+      if (syntheticOpen) return;
+      const paths = pathsFromFileList(input.files);
+      if (!paths.length) return; // 无路径（内部新建等）或不支持 → 交给 Photopea
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      try { input.value = ''; } catch (err) {}
+      window.ppShell.enqueuePaths(paths);
+    }, true);
+  };
+  setInterval(hookFileInput, 800);
+  hookFileInput();
+
+  window.__ppShellDebug = {
+    bindingCount: () => openByPath.size,
+    hasBinding: (p) => openByPath.has(pathKey(p)),
+    bindings: () => [...openByPath.entries()]
+  };
+
   const openOne = async (payload) => {
+    pruneBindings();
+    if (payload && payload.path) {
+      const key = pathKey(payload.path);
+      const bound = openByPath.get(key);
+      if (bound && hasDocTabNamed(bound)) {
+        focusDocTab(bound);
+        return;
+      }
+    }
+
     window.ppShell.showLoading('正在打开 ' + payload.name + '\\n读取文件…');
     const native = await asFile(payload);
     const dt = new DataTransfer();
     dt.items.add(native);
     const drop = () => {
       const ev = { bubbles: true, cancelable: true, dataTransfer: dt };
-      document.dispatchEvent(new DragEvent('dragover', ev));
-      document.dispatchEvent(new DragEvent('drop', ev));
+      syntheticOpen = true;
+      try {
+        document.dispatchEvent(new DragEvent('dragover', ev));
+        document.dispatchEvent(new DragEvent('drop', ev));
+      } finally { syntheticOpen = false; }
     };
     const prev = {
       docs: docCount(),
@@ -386,18 +505,23 @@ const OPEN_RUNTIME = `(() => {
     const input = findFileInput();
     if (input) {
       try {
+        syntheticOpen = true;
         input.files = dt.files;
         input.dispatchEvent(new Event('change', { bubbles: true }));
       } catch (e) { drop(); }
+      finally { syntheticOpen = false; }
     } else drop();
 
     const ok = await waitOpened(payload.name, prev, 60000);
     if (!ok) {
-      // 最后再探一次：很多大图其实已经出来了
-      if (hasDocTabNamed(payload.name) && canvasCount() > 0) return;
+      if (hasDocTabNamed(payload.name) && canvasCount() > 0) {
+        if (payload.path) openByPath.set(pathKey(payload.path), payload.name);
+        return;
+      }
       throw new Error('打开超时：' + payload.name);
     }
     if (window.app) applyName(payload.name);
+    if (payload.path) openByPath.set(pathKey(payload.path), payload.name);
   };
 
   window.__ppDrainFiles = async function () {

@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { GROUPS, DEFAULT_EXTS, isSupportedExt } = require('./formats');
+const { pathKey } = require('./path-key');
 const {
   registerPpSchemes,
   installPpCache,
@@ -332,12 +333,17 @@ function openSettings() {
 }
 
 function queueFiles(files, notify) {
+  let added = 0;
   for (const file of files) {
     const resolved = path.resolve(file);
+    if (!fs.existsSync(resolved)) continue;
+    const key = pathKey(resolved);
+    if (pendingFiles.some((f) => pathKey(f) === key)) continue;
     pendingFiles.push(resolved);
-    allowedFiles.add(resolved.toLowerCase());
+    allowedFiles.add(key);
+    added++;
   }
-  if (notify && win && pendingFiles.length) {
+  if (notify && win && added) {
     win.webContents.send('file-queued', pendingFiles.map((f) => path.basename(f)));
   }
 }
@@ -346,15 +352,36 @@ ipcMain.handle('take-file', async () => {
   const filePath = pendingFiles.shift();
   if (!filePath) return null;
   if (!fs.existsSync(filePath)) {
-    allowedFiles.delete(filePath.toLowerCase());
+    allowedFiles.delete(pathKey(filePath));
     throw new Error('文件不存在: ' + path.basename(filePath));
   }
-  allowedFiles.add(filePath.toLowerCase());
-  return { name: path.basename(filePath), url: toPpFileUrl(filePath) };
+  allowedFiles.add(pathKey(filePath));
+  return {
+    name: path.basename(filePath),
+    url: toPpFileUrl(filePath),
+    path: filePath
+  };
+});
+
+ipcMain.handle('enqueue-paths', async (_e, paths) => {
+  const list = Array.isArray(paths) ? paths : [];
+  const files = list.filter((p) => {
+    if (typeof p !== 'string' || !p) return false;
+    const resolved = path.resolve(p);
+    if (!fs.existsSync(resolved)) return false;
+    const ext = path.extname(resolved).slice(1).toLowerCase();
+    return isSupportedExt(ext);
+  });
+  queueFiles(files, true);
+  return files.map((f) => path.basename(f));
 });
 
 ipcMain.handle('has-pending', () => pendingFiles.length > 0);
 ipcMain.handle('pending-names', () => pendingFiles.map((f) => path.basename(f)));
+
+ipcMain.on('is-supported-ext', (e, ext) => {
+  e.returnValue = isSupportedExt(String(ext || '').toLowerCase());
+});
 
 ipcMain.handle('assoc-state', () => ({
   groups: GROUPS,
@@ -395,7 +422,7 @@ if (!gotLock) {
     app.setAppUserModelId('com.photopea.client');
     const ses = session.defaultSession;
     ppCacheApi = installPpCache(ses, app.getPath('userData'));
-    installPpFileProtocol(ses, (filePath) => allowedFiles.has(path.resolve(filePath).toLowerCase()));
+    installPpFileProtocol(ses, (filePath) => allowedFiles.has(pathKey(filePath)));
     attachNetworkHooks(ses);
     const exts = loadExts();
     queueFiles(collectFiles(process.argv, exts), false);

@@ -2,7 +2,7 @@ const { net, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
 
 // 壳页在 photopea.com；主 JS/CSS 常从 vecpea.com CDN 加载
 const HOST_RE = /^(?:www\.)?(?:photopea|vecpea)\.com$/i;
@@ -311,10 +311,7 @@ function installPpFileProtocol(ses, isAllowedPath) {
   ses.protocol.handle('pp-file', async (request) => {
     let filePath = '';
     try {
-      const u = new URL(request.url);
-      filePath = decodeURIComponent(u.pathname);
-      if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
-      filePath = path.normalize(filePath);
+      filePath = fromPpFileUrl(request.url);
     } catch (e) {
       return new Response('bad url', { status: 400 });
     }
@@ -330,9 +327,28 @@ function installPpFileProtocol(ses, isAllowedPath) {
   });
 }
 
+/** 用 query 承载绝对路径，避免 Chromium 把盘符吃进 hostname（pp-file://c/Users/...） */
 function toPpFileUrl(absPath) {
-  // pathToFileURL 会正确百分号编码非 ASCII，避免中文路径错配
-  return pathToFileURL(path.resolve(absPath)).href.replace(/^file:/i, 'pp-file:');
+  const resolved = path.resolve(absPath);
+  return 'pp-file://local/?p=' + encodeURIComponent(resolved);
+}
+
+function fromPpFileUrl(requestUrl) {
+  const u = new URL(String(requestUrl || ''));
+  const q = u.searchParams.get('p');
+  if (q) return path.resolve(q);
+
+  // 兼容旧形式 / 异常重写
+  if (/^[A-Za-z]$/.test(u.hostname || '')) {
+    return path.resolve(u.hostname + ':' + decodeURIComponent(u.pathname || ''));
+  }
+  if (/^[A-Za-z]:$/i.test(u.hostname || '')) {
+    return path.resolve(u.hostname + decodeURIComponent(u.pathname || ''));
+  }
+  let p = decodeURIComponent(u.pathname || '');
+  if (/^\/[A-Za-z]:[/\\]/.test(p)) p = p.slice(1);
+  if (p) return path.resolve(p);
+  return fileURLToPath(String(requestUrl).replace(/^pp-file:/i, 'file:'));
 }
 
 module.exports = {
