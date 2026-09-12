@@ -1,8 +1,16 @@
-const { app, BrowserWindow, ipcMain, Menu, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, shell, session, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { GROUPS, DEFAULT_EXTS, isSupportedExt } = require('./formats');
+const {
+  registerPpSchemes,
+  installPpCache,
+  installPpFileProtocol,
+  toPpFileUrl,
+  toPpAssetUrl,
+  isCacheableHttps
+} = require('./pp-cache');
 
 const PHOTOPEA_CFG = encodeURIComponent(JSON.stringify({
   environment: { intro: false }
@@ -12,7 +20,11 @@ const AD_RE = /googlesyndication|doubleclick|adservice\.google|pagead2|googleads
 
 let win;
 let settingsWin;
+let ppCacheApi = null;
 const pendingFiles = [];
+const allowedFiles = new Set();
+
+registerPpSchemes();
 
 function appExe() {
   return process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
@@ -181,10 +193,29 @@ function collectFiles(argv, exts) {
   return argv.slice(1).filter((a) => isBoundFile(a, exts)).map((a) => path.resolve(a.replace(/^"(.*)"$/, '$1')));
 }
 
-function attachAdBlock(ses) {
+function attachNetworkHooks(ses) {
   ses.webRequest.onBeforeRequest((details, callback) => {
-    if (/photopea\.com/i.test(details.url)) return callback({});
-    if (AD_RE.test(details.url)) return callback({ cancel: true });
+    const url = details.url || '';
+    if (url.startsWith('pp-asset:') || url.startsWith('pp-file:')) {
+      return callback({});
+    }
+    // 广告拦截（不伤及 photopea / vecpea）
+    if (!/(?:photopea|vecpea)\.com/i.test(url) && AD_RE.test(url)) {
+      return callback({ cancel: true });
+    }
+    const method = (details.method || 'GET').toUpperCase();
+    if (method === 'GET' && details.resourceType !== 'mainFrame' && isCacheableHttps(url)) {
+      // 在线：不改写请求（避免破坏脚本执行），仅后台预热磁盘缓存
+      // 离线：有缓存则重定向到 pp-asset
+      if (ppCacheApi) ppCacheApi.warmUrl(url);
+      if (!net.isOnline() && ppCacheApi && ppCacheApi.hasCached(url)) {
+        try {
+          return callback({ redirectURL: toPpAssetUrl(url) });
+        } catch (e) {
+          return callback({});
+        }
+      }
+    }
     callback({});
   });
 }
@@ -257,6 +288,13 @@ function createWindow() {
     `);
   });
 
+  win.webContents.on('did-fail-load', (_e, _code, _desc, _url, isMainFrame) => {
+    if (!isMainFrame || !ppCacheApi || !ppCacheApi.hasShellCache()) return;
+    const offlineUrl = ppCacheApi.offlineShellUrl(PHOTOPEA_CFG);
+    if (win.webContents.getURL().startsWith('pp-asset:')) return;
+    win.loadURL(offlineUrl);
+  });
+
   win.loadURL(PHOTOPEA);
 }
 
@@ -294,7 +332,11 @@ function openSettings() {
 }
 
 function queueFiles(files, notify) {
-  for (const file of files) pendingFiles.push(path.resolve(file));
+  for (const file of files) {
+    const resolved = path.resolve(file);
+    pendingFiles.push(resolved);
+    allowedFiles.add(resolved.toLowerCase());
+  }
   if (notify && win && pendingFiles.length) {
     win.webContents.send('file-queued', pendingFiles.map((f) => path.basename(f)));
   }
@@ -303,8 +345,12 @@ function queueFiles(files, notify) {
 ipcMain.handle('take-file', async () => {
   const filePath = pendingFiles.shift();
   if (!filePath) return null;
-  const data = await fs.promises.readFile(filePath);
-  return { name: path.basename(filePath), data };
+  if (!fs.existsSync(filePath)) {
+    allowedFiles.delete(filePath.toLowerCase());
+    throw new Error('文件不存在: ' + path.basename(filePath));
+  }
+  allowedFiles.add(filePath.toLowerCase());
+  return { name: path.basename(filePath), url: toPpFileUrl(filePath) };
 });
 
 ipcMain.handle('has-pending', () => pendingFiles.length > 0);
@@ -347,7 +393,10 @@ if (!gotLock) {
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
     app.setAppUserModelId('com.photopea.client');
-    attachAdBlock(session.defaultSession);
+    const ses = session.defaultSession;
+    ppCacheApi = installPpCache(ses, app.getPath('userData'));
+    installPpFileProtocol(ses, (filePath) => allowedFiles.has(path.resolve(filePath).toLowerCase()));
+    attachNetworkHooks(ses);
     const exts = loadExts();
     queueFiles(collectFiles(process.argv, exts), false);
     createWindow();

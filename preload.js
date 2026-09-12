@@ -227,22 +227,129 @@ const OPEN_RUNTIME = `(() => {
   if (window.__ppOpenRuntime) return;
   window.__ppOpenRuntime = true;
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // 文件名/页签比对：NFC + 去 BOM/零宽字符 + 空白折叠 + ASCII 大小写折叠
+  // 避免 Windows/Chromium 对同一中文名出现“看起来一样但不相等”
+  const canon = (s) => String(s || '')
+    .normalize('NFC')
+    .replace(/\\uFEFF/g, '')
+    .replace(/[\\u200B-\\u200D\\u2060]/g, '')
+    .replace(/\\u00A0/g, ' ')
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+  const stemOf = (name) => canon(name).replace(/\\.[^.]+$/, '');
+
+  const nameMatches = (label, name) => {
+    const a = canon(label);
+    const b = canon(name);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const sa = stemOf(a);
+    const sb = stemOf(b);
+    if (!sa || !sb) return false;
+    return sa === sb || a === sb || sa === b;
+  };
+
   const findFileInput = () => {
     const all = [...document.querySelectorAll('input[type=file]')];
     return all.find((el) => el.multiple && el.getAttribute('accept') == null) || all.find((el) => el.multiple) || all[0] || null;
   };
 
-  const waitInput = () => new Promise((resolve) => {
-    const now = findFileInput();
-    if (now) return resolve(now);
-    const t = setInterval(() => {
-      const el = findFileInput();
-      if (el) { clearInterval(t); resolve(el); }
-    }, 40);
-    setTimeout(() => { clearInterval(t); resolve(findFileInput()); }, 60000);
+  const editorChrome = () => !!(
+    document.querySelector('body > div.flexrow.app') ||
+    document.querySelector('div.flexrow.app') ||
+    document.querySelector('.flexrow.app')
+  );
+
+  // 顶栏文档页签：文件名出现即视为已打开（不依赖 window.app）
+  const hasDocTabNamed = (name) => {
+    const want = canon(name);
+    const wantStem = stemOf(name);
+    if (!want) return false;
+    for (const el of document.querySelectorAll('span, div, button, label')) {
+      if (el.closest('#pp-shell-root')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom < 16 || r.top > 110 || r.height > 48 || r.width < 20) continue;
+      const t = canon(el.textContent || '');
+      if (!t || t.length > 120) continue;
+      if (!/\\.[a-z0-9]{2,5}$/i.test(t)) continue;
+      if (nameMatches(t, want) || t === wantStem) return true;
+    }
+    return false;
+  };
+
+  const docCount = () => {
+    try {
+      if (!window.app || !app.documents) return 0;
+      return app.documents.length | 0;
+    } catch (e) { return 0; }
+  };
+
+  const canvasCount = () => {
+    try { return document.querySelectorAll('canvas').length | 0; } catch (e) { return 0; }
+  };
+
+  const waitReady = (timeoutMs) => new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      const input = findFileInput();
+      if (input && (window.app || editorChrome())) return resolve(input);
+      if (Date.now() - start >= timeoutMs) {
+        return reject(new Error(input ? '编辑器尚未完全就绪' : '编辑器未就绪（可能离线且无缓存）'));
+      }
+      setTimeout(tick, 50);
+    };
+    tick();
   });
 
-  const asFile = (payload) => {
+  const waitOpened = (name, prev, timeoutMs) => new Promise((resolve) => {
+    const start = Date.now();
+    let namedSince = 0;
+    const tick = () => {
+      try {
+        const docs = docCount();
+        const canvases = canvasCount();
+        const named = hasDocTabNamed(name);
+        let activeOk = false;
+        try {
+          if (window.app && app.activeDocument) {
+            activeOk = nameMatches(app.activeDocument.name, name);
+          }
+        } catch (e) {}
+
+        if (docs > prev.docs || activeOk) return resolve(true);
+
+        if (named) {
+          if (!namedSince) namedSince = Date.now();
+          // 页签已在：用户截图即此状态，立刻结束遮罩
+          if (canvases > 0 || Date.now() - namedSince >= 120) return resolve(true);
+        }
+
+        // 画布已有且页签文本命中文件名主干（无扩展名的截断页签）
+        if (canvases > 0 && Date.now() - start > 300) {
+          const stem = stemOf(name);
+          if (stem && canon(document.body.innerText || '').indexOf(stem) !== -1 && hasDocTabNamed(name)) {
+            return resolve(true);
+          }
+        }
+      } catch (e) {}
+
+      if (Date.now() - start >= timeoutMs) return resolve(false);
+      setTimeout(tick, 40);
+    };
+    tick();
+  });
+
+  const asFile = async (payload) => {
+    if (payload && payload.url) {
+      const res = await fetch(payload.url);
+      if (!res.ok) throw new Error('读取本地文件失败 (' + res.status + ')');
+      const blob = await res.blob();
+      return new File([blob], payload.name, { type: 'application/octet-stream', lastModified: Date.now() });
+    }
     const raw = payload && payload.data;
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
@@ -252,17 +359,18 @@ const OPEN_RUNTIME = `(() => {
   };
 
   const applyName = (name) => {
-    if (!window.app || !app.activeDocument || !name) return;
+    if (!window.app || !app.activeDocument || !name) return false;
     const doc = app.activeDocument;
     const cur = String(doc.name || '');
-    if (cur === name || cur === name.replace(/\\.[^.]+$/, '')) return;
-    try { doc.name = name; } catch (e) {
-      try { doc.name = name.replace(/\\.[^.]+$/, ''); } catch (e2) {}
+    if (nameMatches(cur, name)) return true;
+    try { doc.name = name; return true; } catch (e) {
+      try { doc.name = stemOf(name); return true; } catch (e2) { return false; }
     }
   };
 
   const openOne = async (payload) => {
-    const native = asFile(payload);
+    window.ppShell.showLoading('正在打开 ' + payload.name + '\\n读取文件…');
+    const native = await asFile(payload);
     const dt = new DataTransfer();
     dt.items.add(native);
     const drop = () => {
@@ -270,32 +378,63 @@ const OPEN_RUNTIME = `(() => {
       document.dispatchEvent(new DragEvent('dragover', ev));
       document.dispatchEvent(new DragEvent('drop', ev));
     };
-    const input = await waitInput();
+    const prev = {
+      docs: docCount(),
+      canvas: canvasCount()
+    };
+    window.ppShell.showLoading('正在打开 ' + payload.name + '\\n解析中，请稍候…');
+    const input = findFileInput();
     if (input) {
       try {
         input.files = dt.files;
         input.dispatchEvent(new Event('change', { bubbles: true }));
       } catch (e) { drop(); }
     } else drop();
-    [300, 1000, 2500].forEach((ms) => setTimeout(() => applyName(payload.name), ms));
+
+    const ok = await waitOpened(payload.name, prev, 60000);
+    if (!ok) {
+      // 最后再探一次：很多大图其实已经出来了
+      if (hasDocTabNamed(payload.name) && canvasCount() > 0) return;
+      throw new Error('打开超时：' + payload.name);
+    }
+    if (window.app) applyName(payload.name);
   };
 
   window.__ppDrainFiles = async function () {
     if (window.__ppShellOpening) return;
     window.__ppShellOpening = true;
+    let lastError = '';
     try {
       const names = await window.ppShell.pendingNames();
-      if (names && names.length) window.ppShell.showLoading('正在加载编辑器…\\n即将打开 ' + names[0]);
-      await waitInput();
+      if (names && names.length) {
+        window.ppShell.showLoading('正在加载编辑器…\\n即将打开 ' + names[0]);
+      }
+      await waitReady(90000);
       while (true) {
         const queued = await window.ppShell.pendingNames();
         if (!queued || !queued.length) break;
-        window.ppShell.showLoading('正在打开 ' + queued[0]);
-        const payload = await window.ppShell.takeFile();
+        let payload;
+        try {
+          payload = await window.ppShell.takeFile();
+        } catch (e) {
+          lastError = (e && e.message) || String(e);
+          break;
+        }
         if (!payload) break;
-        window.ppShell.showLoading('正在打开 ' + payload.name);
-        await openOne(payload);
+        try {
+          await openOne(payload);
+        } catch (e) {
+          lastError = (e && e.message) || String(e);
+          break;
+        }
       }
+      if (lastError) {
+        window.ppShell.showLoading('打开失败\\n' + lastError);
+        await sleep(2800);
+      }
+    } catch (e) {
+      window.ppShell.showLoading('打开失败\\n' + ((e && e.message) || String(e)));
+      await sleep(2800);
     } finally {
       window.ppShell.hideLoading();
       window.__ppShellOpening = false;

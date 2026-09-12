@@ -20,6 +20,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "pp-cache.js",
       "settings.html",
       "settings-preload.js",
       "formats.js",

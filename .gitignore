@@ -1,7 +1,11 @@
 node_modules/
 dist/
+dist-fresh/
+dist-build-*/
 out/
 *.log
 .DS_Store
 _shot*.png
 _pack_test.psd
+_diag*.js
+*.asar
