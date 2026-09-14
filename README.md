@@ -123,7 +123,7 @@ npm run build
 
 下载 `PhotopeaClient-win-x64.zip` → 解压 → 运行文件夹里的 `PhotopeaClient.exe`。
 
-版本说明见仓库根目录 `CHANGELOG.md`。打包、改版本号都**不会**自动发版；需要发版时再说一声（例如「更新版本然后推 release」）。
+版本说明见仓库根目录 `CHANGELOG.md`。打包、改版本号都**不会**自动发版；需要发版时再说一声（例如「更新版本然后推 release」）。推送 `v*` tag 后由 GitHub Actions 自动打包并上传 Release。
 
 若打包时下载 Electron 超时，脚本里已默认使用国内镜像；也可自行设置：
 
@@ -288,7 +288,7 @@ Always-latest download:
 
 Grab `PhotopeaClient-win-x64.zip`, unzip, run `PhotopeaClient.exe` inside the folder.
 
-See `CHANGELOG.md` for notes. Packing / version bumps do **not** auto-publish; ask when you want a Release (e.g. “bump version and push release”).
+See `CHANGELOG.md` for notes. Packing / version bumps do **not** auto-publish; ask when you want a Release (e.g. “bump version and push release”). Pushing a `v*` tag triggers GitHub Actions to pack and publish.
 
 If Electron downloads time out, the pack scripts already prefer a China mirror; you can also set:
 

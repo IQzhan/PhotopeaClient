@@ -72,7 +72,7 @@
 - **占用**：无法删除的旧目录改名隔离到 `.tmp/trash/`，再写入新的完整包。
 - **分发给他人时不需要 Node.js**；打包机需要 Node.js。
 - `release/` 与 `.tmp/` 勿提交版本库。
-- **GitHub Release（手动）**：用 `npm run release` 从 `CHANGELOG.md` 提取尚未发布的版本说明并上传 zip。打包与改版本号都不自动发 Release；仅在明确要求发版时执行。用户下载入口：`https://github.com/IQzhan/PhotopeaClient/releases/latest`。
+- **GitHub Release（手动）**：版本说明在 `CHANGELOG.md`。推送 tag `v*` 后由 GitHub Actions（`.github/workflows/release.yml`）打包并上传 zip。本机 `npm run release` 负责校验并推送 tag；**打包与改版本号都不自动发版**。用户下载：`https://github.com/IQzhan/PhotopeaClient/releases/latest`。
 - **版本号**：不频繁变更；测试打包不必改版本；仅在明确要求「更新版本」时修改 `package.json` 的 `version` 并归档 CHANGELOG。
 
 ### 目录约定

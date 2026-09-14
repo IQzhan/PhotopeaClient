@@ -12,40 +12,42 @@ alwaysApply: true
 - **发 Release 也是手动**：用户明确说推 release / 发版时才执行。
 - 日常改动写入 `CHANGELOG.md` 的 `## [Unreleased]`。
 
+## 推荐发版路径（稳定）
+
+推送 tag → `.github/workflows/release.yml` 在 GitHub 上 `npm run pack` 并创建 Release（避免本机访问 `api.github.com` 超时）。
+
+用户下载：https://github.com/IQzhan/PhotopeaClient/releases/latest
+
 ## 用户口令 → Agent 动作
 
 ### 「更新版本然后推 release」（或同义）
 
-自动做完下列全部步骤（默认 **patch** 递增，除非用户指定 minor/major）：
+默认 **patch** 递增（除非用户指定 minor/major），自动做完：
 
-1. 读 `package.json` version 与 `CHANGELOG.md` `[Unreleased]`，拟定下一版本与发版说明（可短确认，用户已说「更新版本」则可直接执行）。
-2. 把 `[Unreleased]` 条目挪到 `## [x.y.z] - YYYY-MM-DD`，清空 Unreleased 占位。
-3. 改 `package.json` → `"version": "x.y.z"`。
-4. `npm run pack`（保证 zip 是当前代码）。
-5. 提交（含 CHANGELOG + package.json 等）→ `git tag vX.Y.Z` → `git push`（含 tag）。
-6. `npm run release`（或 `node scripts/release.js`）创建 GitHub Release 并上传 `release/PhotopeaClient-win-x64.zip`。
-7. 把 Release / latest 链接回复用户。
+1. 读 `package.json` 与 `CHANGELOG.md` `[Unreleased]`，拟定下一版本与说明。
+2. 把 Unreleased 挪到 `## [x.y.z] - YYYY-MM-DD`，保留空的 Unreleased 占位。
+3. 更新 `package.json` 的 `version`。
+4. 提交并 `git push origin main`。
+5. `git tag vX.Y.Z` && `git push origin vX.Y.Z`（触发 Actions 发版）。
+6. 如需本机验证可再 `npm run pack`；不要默认依赖本机 `gh release create`。
+7. 回复用户 latest / tag 链接；可用 `gh run list` 查看 Actions 是否成功。
 
 ### 「推 release」（不升版本）
 
-1. 确认 `CHANGELOG` 已有当前 `package.json` 版本小节且 GitHub 尚未发布。
-2. 若 zip 过旧或缺失则 `npm run pack`。
-3. `node scripts/release.js`（必要时先提交/打 tag/push）。
-4. 回复 Release 链接。
+1. 确认 CHANGELOG 已有当前 `package.json` 版本小节。
+2. 确保该 `vX.Y.Z` tag 已推送；若无则打 tag 并 push（触发 Actions）。
+3. 若 tag 已在远程但 Release 缺失：`gh workflow run Release -f tag=vX.Y.Z` 补发。
+4. 回复链接。
 
 ### 仅「打包」
 
-只跑 `npm run pack`，**不要**改版本、**不要**发 Release。
+只跑 `npm run pack`，不改版本、不发 Release。
 
 ## 命令
 
 | 命令 | 作用 |
 |------|------|
 | `npm run pack` | 只打包 |
-| `npm run release` | 发布当前 package 版本（CHANGELOG 须有对应小节） |
-| `npm run release -- --pack` | 先打包再发布 |
-| `npm run release -- --all` | 发布所有 CHANGELOG 里尚未上架的版本 |
-
-## 用户下载入口
-
-https://github.com/IQzhan/PhotopeaClient/releases/latest
+| `npm run release` | 校验 CHANGELOG 并确保 tag 已推送（Actions 发版） |
+| `npm run release -- --local --pack` | 本机打包并用 gh 上传（网络不稳时可能失败） |
+| `node scripts/changelog-notes.js 1.0.0` | 只打印某版本的 Release 正文 |

@@ -1,15 +1,18 @@
 'use strict';
 
 /**
- * 从 CHANGELOG.md 提取尚未在 GitHub 发布的版本说明，并创建 Release。
+ * 发版辅助：校验 CHANGELOG，确保 tag 已推送；可选在本地用 gh 上传（网络不稳时请依赖 Actions）。
+ *
+ * 推荐发版路径（稳定）：
+ *   1) 写好 CHANGELOG 对应版本小节 + package.json version
+ *   2) commit + git tag vX.Y.Z + git push origin main --tags
+ *   3) .github/workflows/release.yml 在 GitHub 上打包并创建 Release
  *
  * 用法:
- *   node scripts/release.js              # 发布 package.json 当前版本（须已有 CHANGELOG 小节且未发布）
- *   node scripts/release.js --pack       # 先打包再发布
- *   node scripts/release.js --all        # 按版本号从旧到新，发布所有「未上架」的 CHANGELOG 版本
+ *   node scripts/release.js              # 校验当前 package 版本并确保 tag 已推送
+ *   node scripts/release.js --local      # 额外尝试本机 gh 上传 zip（需先 npm run pack）
+ *   node scripts/release.js --pack --local
  *   node scripts/release.js --version 1.0.1
- *
- * 不会自动改版本号。升版本请由 Agent 在「更新版本然后推 release」流程里改 package.json + CHANGELOG。
  */
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -36,144 +39,110 @@ function run(cmd, args, opts = {}) {
 }
 
 function parseArgs(argv) {
-  const out = { pack: false, all: false, version: null };
+  const out = { pack: false, local: false, version: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--pack') out.pack = true;
-    else if (a === '--all') out.all = true;
+    else if (a === '--local') out.local = true;
     else if (a === '--version') out.version = String(argv[++i] || '').replace(/^v/i, '');
   }
   return out;
 }
 
-/** @returns {{ version: string, date: string, body: string }[]} */
-function parseChangelog(md) {
-  const lines = md.split(/\r?\n/);
-  const sections = [];
-  let cur = null;
-  for (const line of lines) {
-    const m = line.match(/^##\s+\[([^\]]+)\](?:\s*-\s*(\d{4}-\d{2}-\d{2}))?\s*$/);
-    if (m) {
-      if (cur) sections.push(cur);
-      cur = { version: m[1].trim(), date: (m[2] || '').trim(), bodyLines: [] };
-      continue;
-    }
-    if (cur) cur.bodyLines.push(line);
-  }
-  if (cur) sections.push(cur);
-  return sections.map((s) => ({
-    version: s.version,
-    date: s.date,
-    body: s.bodyLines.join('\n').replace(/\n+$/g, '').replace(/^\n+/, '').trim()
-  }));
+function sectionExists(ver) {
+  const md = fs.readFileSync(CHANGELOG, 'utf8');
+  return new RegExp(`^##\\s+\\[${ver.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'm').test(md);
 }
 
-function listPublishedVersions() {
-  const set = new Set();
-  try {
-    const json = run('gh', ['release', 'list', '--limit', '100', '--json', 'tagName']);
-    const arr = JSON.parse(json || '[]');
-    for (const r of arr) {
-      const tag = String(r.tagName || '').replace(/^v/i, '');
-      if (tag) set.add(tag);
-    }
-  } catch (e) {
-    // 网络失败时退回本地 tag
-    try {
-      const tags = run('git', ['tag', '-l', 'v*']);
-      for (const t of tags.split(/\r?\n/)) {
-        const v = t.replace(/^v/i, '').trim();
-        if (v) set.add(v);
-      }
-    } catch (e2) {}
-  }
-  return set;
-}
-
-function cmpVer(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
-  const n = Math.max(pa.length, pb.length);
-  for (let i = 0; i < n; i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0);
-    if (d) return d;
-  }
-  return 0;
-}
-
-function notesFor(section) {
-  const title = section.date
-    ? `PhotopeaClient ${section.version} (${section.date})`
-    : `PhotopeaClient ${section.version}`;
-  const body = section.body || '_（无额外说明）_';
-  return `${title}\n\n${body}\n\n---\n下载下方 zip，解压后运行 \`PhotopeaClient\\PhotopeaClient.exe\`（勿只拷贝 exe）。\n最新入口：https://github.com/IQzhan/PhotopeaClient/releases/latest\n`;
-}
-
-function ensureZip(doPack) {
-  if (doPack || !fs.existsSync(ZIP)) {
-    console.log('[release] 打包…');
-    run('node', ['scripts/pack-one.js'], { stdio: 'inherit' });
-  }
-  if (!fs.existsSync(ZIP)) throw new Error('缺少 release/PhotopeaClient-win-x64.zip，请先 npm run pack');
-}
-
-function publishOne(section) {
-  const tag = `v${section.version}`;
-  const notesFile = path.join(root, '.tmp', `release-notes-${section.version}.md`);
-  fs.mkdirSync(path.dirname(notesFile), { recursive: true });
-  fs.writeFileSync(notesFile, notesFor(section), 'utf8');
-
-  // 确保远程有 tag（有则忽略）
+function ensureTag(ver) {
+  const tag = `v${ver}`;
   try {
     run('git', ['rev-parse', tag]);
   } catch (e) {
     run('git', ['tag', tag]);
-    try { run('git', ['push', 'origin', tag]); } catch (e2) {
-      console.warn('[release] push tag 失败，尝试继续创建 Release:', e2.message);
+  }
+  try {
+    run('git', ['push', 'origin', tag]);
+    console.log(`[release] 已推送 tag ${tag} → GitHub Actions 将打包并发布`);
+  } catch (e) {
+    console.warn('[release] push tag:', e.message || e);
+  }
+  return tag;
+}
+
+function ensureZip(doPack) {
+  if (doPack || !fs.existsSync(ZIP)) {
+    console.log('[release] 本地打包…');
+    run('node', ['scripts/pack-one.js'], { stdio: 'inherit' });
+  }
+  if (!fs.existsSync(ZIP)) throw new Error('缺少 zip，请先 npm run pack');
+}
+
+function tryLocalUpload(ver) {
+  const tag = `v${ver}`;
+  const notesFile = path.join(root, '.tmp', `release-notes-${ver}.md`);
+  fs.mkdirSync(path.dirname(notesFile), { recursive: true });
+  run('node', ['scripts/changelog-notes.js', ver], { stdio: 'pipe' });
+  const notes = spawnSync('node', ['scripts/changelog-notes.js', ver], {
+    cwd: root,
+    encoding: 'utf8',
+    shell: true
+  });
+  if (notes.status) throw new Error(notes.stderr || 'changelog-notes failed');
+  fs.writeFileSync(notesFile, notes.stdout, 'utf8');
+
+  console.log(`[release] 尝试本机 gh 上传 ${tag} …`);
+  let lastErr = null;
+  for (let i = 1; i <= 3; i++) {
+    try {
+      run('gh', [
+        'release', 'create', tag,
+        ZIP,
+        '--title', tag,
+        '--notes-file', notesFile
+      ], { stdio: 'inherit' });
+      console.log(`[release] 本机上传完成: https://github.com/IQzhan/PhotopeaClient/releases/tag/${tag}`);
+      return;
+    } catch (e) {
+      lastErr = e;
+      const msg = String(e.message || e);
+      if (/already exists/i.test(msg)) {
+        try {
+          run('gh', ['release', 'upload', tag, ZIP, '--clobber'], { stdio: 'inherit' });
+          console.log(`[release] 已更新现有 Release 资源: ${tag}`);
+          return;
+        } catch (e2) {
+          console.log(`[release] Release 已存在: https://github.com/IQzhan/PhotopeaClient/releases/tag/${tag}`);
+          return;
+        }
+      }
+      console.warn(`[release] 本机上传第 ${i} 次失败: ${msg}`);
+      if (i < 3) spawnSync('ping', ['-n', '5', '127.0.0.1'], { shell: true, stdio: 'ignore' });
     }
   }
-
-  console.log(`[release] 创建 GitHub Release ${tag} …`);
-  run('gh', [
-    'release', 'create', tag,
-    ZIP,
-    '--title', `v${section.version}`,
-    '--notes-file', notesFile
-  ], { stdio: 'inherit' });
-  console.log(`[release] 完成: https://github.com/IQzhan/PhotopeaClient/releases/tag/${tag}`);
+  console.warn('[release] 本机上传失败（可忽略）：tag 已推送时由 Actions 发版。', lastErr && lastErr.message);
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(CHANGELOG)) throw new Error('缺少 CHANGELOG.md');
-  const sections = parseChangelog(fs.readFileSync(CHANGELOG, 'utf8'))
-    .filter((s) => s.version.toLowerCase() !== 'unreleased');
-  const published = listPublishedVersions();
+  const ver = args.version || String(pkg.version || '').trim();
+  if (!ver) throw new Error('无法确定版本号');
+  if (!sectionExists(ver)) {
+    throw new Error(`CHANGELOG.md 中没有 ## [${ver}] 小节，请先归档版本记录。`);
+  }
 
-  let todo = [];
-  if (args.all) {
-    todo = sections
-      .filter((s) => !published.has(s.version))
-      .sort((a, b) => cmpVer(a.version, b.version));
+  const tag = ensureTag(ver);
+  console.log(`[release] 版本 ${ver} / ${tag}`);
+  console.log('[release] 用户下载: https://github.com/IQzhan/PhotopeaClient/releases/latest');
+
+  if (args.local) {
+    ensureZip(args.pack);
+    tryLocalUpload(ver);
   } else {
-    const ver = args.version || String(pkg.version || '').trim();
-    if (!ver) throw new Error('无法确定版本号');
-    if (published.has(ver)) {
-      console.log(`[release] v${ver} 已发布，跳过。`);
-      return;
-    }
-    const sec = sections.find((s) => s.version === ver);
-    if (!sec) throw new Error(`CHANGELOG.md 中没有 ## [${ver}] 小节，请先写版本记录再发。`);
-    todo = [sec];
+    console.log('[release] 默认走 GitHub Actions（推送 tag 后自动 pack + Release）。');
+    console.log('[release] 若要本机上传 zip，请加: npm run release -- --local --pack');
   }
-
-  if (!todo.length) {
-    console.log('[release] 没有未发布的 CHANGELOG 版本。');
-    return;
-  }
-
-  ensureZip(args.pack);
-  for (const sec of todo) publishOne(sec);
 }
 
 try {
