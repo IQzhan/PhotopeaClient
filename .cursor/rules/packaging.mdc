@@ -30,3 +30,5 @@ alwaysApply: true
 ## 给用户的路径
 
 告诉用户运行：`release\PhotopeaClient\PhotopeaClient.exe`（整夹一起用）。
+
+发版与版本号规则见 `.cursor/rules/release.mdc`（打包≠发版；仅口头明确要求时升版本 / 推 Release）。

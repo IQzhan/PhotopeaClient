@@ -115,6 +115,16 @@ npm run build
 
 > 不要只发一个 `PhotopeaClient.exe`。旁边的 dll、`resources` 等必须一起带走，否则别人打不开。
 
+### 给别人下载最新版（推荐）
+
+固定入口（始终指向最新 Release）：
+
+**https://github.com/IQzhan/PhotopeaClient/releases/latest**
+
+下载 `PhotopeaClient-win-x64.zip` → 解压 → 运行文件夹里的 `PhotopeaClient.exe`。
+
+版本说明见仓库根目录 `CHANGELOG.md`。打包、改版本号都**不会**自动发版；需要发版时再说一声（例如「更新版本然后推 release」）。
+
 若打包时下载 Electron 超时，脚本里已默认使用国内镜像；也可自行设置：
 
 ```bat
@@ -269,6 +279,16 @@ Outputs:
 | `.tmp\` | Local scratch (staging / lock quarantine / diagnostics); safe to delete; not a release folder |
 
 > Do not ship only `PhotopeaClient.exe`. DLLs, `resources`, etc. must travel with it.
+
+### Get the latest build (recommended)
+
+Always-latest download:
+
+**https://github.com/IQzhan/PhotopeaClient/releases/latest**
+
+Grab `PhotopeaClient-win-x64.zip`, unzip, run `PhotopeaClient.exe` inside the folder.
+
+See `CHANGELOG.md` for notes. Packing / version bumps do **not** auto-publish; ask when you want a Release (e.g. “bump version and push release”).
 
 If Electron downloads time out, the pack scripts already prefer a China mirror; you can also set:
 

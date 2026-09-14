@@ -60,6 +60,7 @@
 - `README.md` 须同时包含**中文**与**English**完整说明，文内可用链接跳转到对应语言章节。
 - 用脚本校验两侧章节结构同步、均有对应翻译（`npm run check:readme`）。
 - `REQUIREMENTS.md` 只保留最终需求状态，不记录变更流水。
+- 面向用户的版本说明写在 `CHANGELOG.md`（`[Unreleased]` + 已发布版本小节）。
 
 ## 8. 分发与打包规范
 
@@ -71,6 +72,8 @@
 - **占用**：无法删除的旧目录改名隔离到 `.tmp/trash/`，再写入新的完整包。
 - **分发给他人时不需要 Node.js**；打包机需要 Node.js。
 - `release/` 与 `.tmp/` 勿提交版本库。
+- **GitHub Release（手动）**：用 `npm run release` 从 `CHANGELOG.md` 提取尚未发布的版本说明并上传 zip。打包与改版本号都不自动发 Release；仅在明确要求发版时执行。用户下载入口：`https://github.com/IQzhan/PhotopeaClient/releases/latest`。
+- **版本号**：不频繁变更；测试打包不必改版本；仅在明确要求「更新版本」时修改 `package.json` 的 `version` 并归档 CHANGELOG。
 
 ### 目录约定
 

@@ -1,0 +1,51 @@
+---
+description: 版本与 GitHub Release 流程（手动发版；口头「更新版本然后推 release」时自动执行）
+alwaysApply: true
+---
+
+# 版本 / Release
+
+## 原则
+
+- **打包 ≠ 发版**：`npm run pack` 可随时做（含测试），不自动发 Release、不自动改版本。
+- **改版本号很少做**：只有用户明确说要更新版本时才改 `package.json` 的 `version`。
+- **发 Release 也是手动**：用户明确说推 release / 发版时才执行。
+- 日常改动写入 `CHANGELOG.md` 的 `## [Unreleased]`。
+
+## 用户口令 → Agent 动作
+
+### 「更新版本然后推 release」（或同义）
+
+自动做完下列全部步骤（默认 **patch** 递增，除非用户指定 minor/major）：
+
+1. 读 `package.json` version 与 `CHANGELOG.md` `[Unreleased]`，拟定下一版本与发版说明（可短确认，用户已说「更新版本」则可直接执行）。
+2. 把 `[Unreleased]` 条目挪到 `## [x.y.z] - YYYY-MM-DD`，清空 Unreleased 占位。
+3. 改 `package.json` → `"version": "x.y.z"`。
+4. `npm run pack`（保证 zip 是当前代码）。
+5. 提交（含 CHANGELOG + package.json 等）→ `git tag vX.Y.Z` → `git push`（含 tag）。
+6. `npm run release`（或 `node scripts/release.js`）创建 GitHub Release 并上传 `release/PhotopeaClient-win-x64.zip`。
+7. 把 Release / latest 链接回复用户。
+
+### 「推 release」（不升版本）
+
+1. 确认 `CHANGELOG` 已有当前 `package.json` 版本小节且 GitHub 尚未发布。
+2. 若 zip 过旧或缺失则 `npm run pack`。
+3. `node scripts/release.js`（必要时先提交/打 tag/push）。
+4. 回复 Release 链接。
+
+### 仅「打包」
+
+只跑 `npm run pack`，**不要**改版本、**不要**发 Release。
+
+## 命令
+
+| 命令 | 作用 |
+|------|------|
+| `npm run pack` | 只打包 |
+| `npm run release` | 发布当前 package 版本（CHANGELOG 须有对应小节） |
+| `npm run release -- --pack` | 先打包再发布 |
+| `npm run release -- --all` | 发布所有 CHANGELOG 里尚未上架的版本 |
+
+## 用户下载入口
+
+https://github.com/IQzhan/PhotopeaClient/releases/latest
