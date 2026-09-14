@@ -1,7 +1,7 @@
 {
   "name": "photopea-client",
   "version": "1.0.0",
-  "description": "Minimal desktop shell for Photopea",
+  "description": "Unofficial desktop shell for Photopea (https://www.photopea.com/). Not affiliated — rights remain with Photopea. | 非官方桌面壳，编辑器来自官网；权益归原作者。",
   "main": "main.js",
   "author": "",
   "license": "MIT",
