@@ -21,15 +21,35 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const CHANGELOG = path.join(root, 'CHANGELOG.md');
 const ZIP = path.join(root, 'release', 'PhotopeaClient-win-x64.zip');
+const PROXY_FILE = path.join(root, '.tmp', 'github-api-proxy.url');
 const pkg = require(path.join(root, 'package.json'));
 
+/** 仅给 gh 子进程用：不改系统代理。来源 GITHUB_API_PROXY 或 .tmp/github-api-proxy.url */
+function githubApiProxyEnv() {
+  const proxy = String(process.env.GITHUB_API_PROXY || '').trim()
+    || (fs.existsSync(PROXY_FILE)
+      ? fs.readFileSync(PROXY_FILE, 'utf8').split(/\r?\n/)[0].trim()
+      : '');
+  if (!proxy) return process.env;
+  return {
+    ...process.env,
+    HTTPS_PROXY: proxy,
+    HTTP_PROXY: proxy,
+    NO_PROXY: 'localhost,127.0.0.1,::1'
+  };
+}
+
 function run(cmd, args, opts = {}) {
+  const env = opts.githubApiProxy ? githubApiProxyEnv() : process.env;
+  if (opts.githubApiProxy && env.HTTPS_PROXY && env.HTTPS_PROXY !== process.env.HTTPS_PROXY) {
+    console.log(`[release] gh 经 API 代理: ${env.HTTPS_PROXY}`);
+  }
   const r = spawnSync(cmd, args, {
     cwd: root,
     encoding: 'utf8',
     shell: true,
     stdio: opts.stdio || 'pipe',
-    env: process.env
+    env
   });
   if (r.status) {
     const err = (r.stderr || r.stdout || '').trim();
@@ -100,7 +120,7 @@ function tryLocalUpload(ver) {
         ZIP,
         '--title', tag,
         '--notes-file', notesFile
-      ], { stdio: 'inherit' });
+      ], { stdio: 'inherit', githubApiProxy: true });
       console.log(`[release] 本机上传完成: https://github.com/IQzhan/PhotopeaClient/releases/tag/${tag}`);
       return;
     } catch (e) {
@@ -108,7 +128,10 @@ function tryLocalUpload(ver) {
       const msg = String(e.message || e);
       if (/already exists/i.test(msg)) {
         try {
-          run('gh', ['release', 'upload', tag, ZIP, '--clobber'], { stdio: 'inherit' });
+          run('gh', ['release', 'upload', tag, ZIP, '--clobber'], {
+            stdio: 'inherit',
+            githubApiProxy: true
+          });
           console.log(`[release] 已更新现有 Release 资源: ${tag}`);
           return;
         } catch (e2) {

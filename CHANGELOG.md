@@ -9,6 +9,7 @@
 ## [Unreleased]
 
 - README：英文在前；更强调 Photopea 官网网址与原站点权益；中英同步
+- 本机发版可选经 `GITHUB_API_PROXY` / `.tmp/github-api-proxy.url` 访问 GitHub API（不改系统代理）
 
 ## [1.0.0] - 2026-09-14
 

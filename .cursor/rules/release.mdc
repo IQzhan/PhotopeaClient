@@ -51,3 +51,9 @@ alwaysApply: true
 | `npm run release` | 校验 CHANGELOG 并确保 tag 已推送（Actions 发版） |
 | `npm run release -- --local --pack` | 本机打包并用 gh 上传（网络不稳时可能失败） |
 | `node scripts/changelog-notes.js 1.0.0` | 只打印某版本的 Release 正文 |
+| `node scripts/with-github-api-proxy.js gh …` | 仅该命令经代理访问 GitHub API（不改系统代理） |
+
+### 本机 API 代理（可选）
+
+公司网直连 `api.github.com` 不稳时，可把代理 URL 写到 `.tmp/github-api-proxy.url`（一行，如 `http://127.0.0.1:7890`），或设环境变量 `GITHUB_API_PROXY`。  
+只影响 `gh` 发版相关命令，**不改**系统/浏览器对其它站点的代理。公共免费代理极不稳定，优先自有或合规代理。
